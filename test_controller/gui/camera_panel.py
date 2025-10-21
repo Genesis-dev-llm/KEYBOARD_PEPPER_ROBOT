@@ -1,443 +1,321 @@
 """
-Control Panel - Movement, dances, and robot controls
-Right side panel with all control buttons.
+Camera Panel - Dual video feed display
+Left side panel with Pepper camera + external camera feeds.
 """
 
+import logging
 import threading
+import time
+import cv2
+import numpy as np
+import urllib.request
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QSlider, QGroupBox, QRadioButton,
-    QButtonGroup, QScrollArea, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QPushButton, QGroupBox, QComboBox, QSplitter
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap
 
-from .audio_streamer import create_audio_streamer
-from .voice_commander_hybrid import create_hybrid_voice_commander
+from .file_handler import FileDropPanel
 
-class ControlPanel(QWidget):
-    """Panel for robot control buttons and settings."""
+logger = logging.getLogger(__name__)
+
+class VideoDisplay(QLabel):
+    """Widget for displaying video frames."""
     
-    # Signals
-    emergency_stop_signal = pyqtSignal()
-    status_update_signal = pyqtSignal(str)
-    
-    def __init__(self, controllers, dances, tablet_ctrl, pepper_conn):
+    def __init__(self, title="Camera"):
         super().__init__()
         
-        self.controllers = controllers
-        self.dances = dances
+        self.setObjectName("videoLabel")
+        self.setMinimumSize(320, 240)
+        self.setAlignment(Qt.AlignCenter)
+        self.setScaledContents(False)
+        
+        # Placeholder
+        self.setText(f"{title}\nNo feed")
+        self.setStyleSheet("background-color: #000; color: #666; font-size: 18px;")
+    
+    def update_frame(self, frame):
+        """Update with new video frame (numpy array)."""
+        try:
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            bytes_per_line = ch * w
+            
+            # Create QImage
+            qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            
+            # Scale to fit widget while maintaining aspect ratio
+            scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
+                self.width(), self.height(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            
+            self.setPixmap(scaled_pixmap)
+            
+        except Exception as e:
+            logger.error(f"Error updating frame: {e}")
+    
+    def clear_frame(self):
+        """Clear the display."""
+        self.clear()
+        self.setText("No feed")
+
+
+class PepperCameraFeed:
+    """Manages Pepper's camera feed streaming."""
+    
+    def __init__(self, ip, port=8080):
+        self.ip = ip
+        self.port = port
+        self.video_url = f"http://{ip}:{port}/video_feed"
+        self.is_running = False
+        self.thread = None
+        self.frame_callback = None
+    
+    def start(self, callback):
+        """Start streaming with frame callback."""
+        if self.is_running:
+            return False
+        
+        self.frame_callback = callback
+        self.is_running = True
+        self.thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self.thread.start()
+        return True
+    
+    def stop(self):
+        """Stop streaming."""
+        self.is_running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+    
+    def _stream_loop(self):
+        """Main streaming loop."""
+        try:
+            stream = urllib.request.urlopen(self.video_url, timeout=5)
+            bytes_data = b''
+            
+            while self.is_running:
+                bytes_data += stream.read(1024)
+                a = bytes_data.find(b'\xff\xd8')  # JPEG start
+                b = bytes_data.find(b'\xff\xd9')  # JPEG end
+                
+                if a != -1 and b != -1:
+                    jpg = bytes_data[a:b+2]
+                    bytes_data = bytes_data[b+2:]
+                    
+                    # Decode frame
+                    frame = cv2.imdecode(
+                        np.frombuffer(jpg, dtype=np.uint8),
+                        cv2.IMREAD_COLOR
+                    )
+                    
+                    if frame is not None and self.frame_callback:
+                        self.frame_callback(frame)
+                        
+        except Exception as e:
+            logger.error(f"Pepper camera stream error: {e}")
+        finally:
+            self.is_running = False
+
+
+class ExternalCameraFeed:
+    """Manages external webcam/HoverCam feed."""
+    
+    def __init__(self, camera_id=0):
+        self.camera_id = camera_id
+        self.capture = None
+        self.is_running = False
+        self.thread = None
+        self.frame_callback = None
+    
+    def start(self, callback):
+        """Start streaming."""
+        if self.is_running:
+            return False
+        
+        try:
+            self.capture = cv2.VideoCapture(self.camera_id)
+            if not self.capture.isOpened():
+                logger.error(f"Cannot open camera {self.camera_id}")
+                return False
+            
+            self.frame_callback = callback
+            self.is_running = True
+            self.thread = threading.Thread(target=self._stream_loop, daemon=True)
+            self.thread.start()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to start external camera: {e}")
+            return False
+    
+    def stop(self):
+        """Stop streaming."""
+        self.is_running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        if self.capture:
+            self.capture.release()
+            self.capture = None
+    
+    def _stream_loop(self):
+        """Main streaming loop."""
+        while self.is_running and self.capture:
+            try:
+                ret, frame = self.capture.read()
+                if ret and self.frame_callback:
+                    self.frame_callback(frame)
+                time.sleep(0.033)  # ~30 FPS
+            except Exception as e:
+                logger.error(f"External camera error: {e}")
+                break
+        
+        self.is_running = False
+
+
+class CameraPanel(QWidget):
+    """Panel for dual camera feeds and file drop."""
+    
+    status_update_signal = pyqtSignal(str)
+    
+    def __init__(self, session, robot_ip, tablet_ctrl):
+        super().__init__()
+        
+        self.session = session
+        self.robot_ip = robot_ip
         self.tablet = tablet_ctrl
-        self.pepper = pepper_conn
         
-        # Initialize audio streamer
-        self.audio_streamer = create_audio_streamer(pepper_conn.session)
-        
-        # Initialize HYBRID voice commander (best of both worlds!)
-        self.voice_commander = create_hybrid_voice_commander(
-            pepper_conn, controllers, dances, tablet_ctrl
-        )
+        # Camera feeds
+        self.pepper_feed = PepperCameraFeed(robot_ip)
+        self.external_feed = ExternalCameraFeed(camera_id=0)
         
         self._init_ui()
     
     def _init_ui(self):
-        """Initialize the UI."""
-        # Make panel scrollable
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        """Initialize UI."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
         
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(15)
+        # === PEPPER CAMERA ===
+        pepper_group = QGroupBox("📹 Pepper Camera")
+        pepper_layout = QVBoxLayout()
         
-        # === MOVEMENT CONTROLS ===
-        layout.addWidget(self._create_movement_group())
+        self.pepper_display = VideoDisplay("Pepper's View")
+        pepper_layout.addWidget(self.pepper_display)
         
-        # === DANCE CONTROLS ===
-        layout.addWidget(self._create_dance_group())
+        # Pepper camera controls
+        pepper_controls = QHBoxLayout()
         
-        # === AUDIO CONTROLS ===
-        layout.addWidget(self._create_audio_group())
+        self.pepper_start_btn = QPushButton("▶ Start")
+        self.pepper_start_btn.clicked.connect(self._start_pepper_camera)
         
-        # === TABLET MODE ===
-        layout.addWidget(self._create_tablet_group())
+        self.pepper_stop_btn = QPushButton("⏹ Stop")
+        self.pepper_stop_btn.clicked.connect(self._stop_pepper_camera)
+        self.pepper_stop_btn.setEnabled(False)
         
-        # === EMERGENCY STOP ===
-        layout.addWidget(self._create_emergency_button())
+        pepper_controls.addWidget(self.pepper_start_btn)
+        pepper_controls.addWidget(self.pepper_stop_btn)
         
-        layout.addStretch()
+        pepper_layout.addLayout(pepper_controls)
+        pepper_group.setLayout(pepper_layout)
         
-        scroll.setWidget(container)
+        # === EXTERNAL CAMERA ===
+        external_group = QGroupBox("📷 External Camera")
+        external_layout = QVBoxLayout()
         
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        self.external_display = VideoDisplay("HoverCam / Webcam")
+        external_layout.addWidget(self.external_display)
+        
+        # External camera controls
+        external_controls = QHBoxLayout()
+        
+        self.camera_selector = QComboBox()
+        self.camera_selector.addItems(["Camera 0", "Camera 1", "Camera 2"])
+        
+        self.external_start_btn = QPushButton("▶ Start")
+        self.external_start_btn.clicked.connect(self._start_external_camera)
+        
+        self.external_stop_btn = QPushButton("⏹ Stop")
+        self.external_stop_btn.clicked.connect(self._stop_external_camera)
+        self.external_stop_btn.setEnabled(False)
+        
+        external_controls.addWidget(self.camera_selector)
+        external_controls.addWidget(self.external_start_btn)
+        external_controls.addWidget(self.external_stop_btn)
+        
+        external_layout.addLayout(external_controls)
+        external_group.setLayout(external_layout)
+        
+        # === FILE DROP ZONE ===
+        self.file_drop_panel = FileDropPanel(self.tablet, self.session)
+        self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
+        
+        # Add all to main layout
+        layout.addWidget(pepper_group, 1)
+        layout.addWidget(external_group, 1)
+        layout.addWidget(self.file_drop_panel, 0)
     
-    def _create_movement_group(self):
-        """Create movement control group."""
-        group = QGroupBox("🎮 Movement")
-        layout = QVBoxLayout()
-        
-        # Arrow pad
-        arrow_layout = QGridLayout()
-        
-        up_btn = QPushButton("↑")
-        up_btn.setFixedSize(60, 50)
-        up_btn.pressed.connect(lambda: self._move('forward'))
-        up_btn.released.connect(lambda: self._stop_move())
-        
-        down_btn = QPushButton("↓")
-        down_btn.setFixedSize(60, 50)
-        down_btn.pressed.connect(lambda: self._move('back'))
-        down_btn.released.connect(lambda: self._stop_move())
-        
-        left_btn = QPushButton("←")
-        left_btn.setFixedSize(60, 50)
-        left_btn.pressed.connect(lambda: self._move('left'))
-        left_btn.released.connect(lambda: self._stop_move())
-        
-        right_btn = QPushButton("→")
-        right_btn.setFixedSize(60, 50)
-        right_btn.pressed.connect(lambda: self._move('right'))
-        right_btn.released.connect(lambda: self._stop_move())
-        
-        center_label = QLabel("●")
-        center_label.setAlignment(Qt.AlignCenter)
-        center_label.setStyleSheet("font-size: 20px; color: #0e639c;")
-        
-        arrow_layout.addWidget(up_btn, 0, 1)
-        arrow_layout.addWidget(left_btn, 1, 0)
-        arrow_layout.addWidget(center_label, 1, 1)
-        arrow_layout.addWidget(right_btn, 1, 2)
-        arrow_layout.addWidget(down_btn, 2, 1)
-        
-        layout.addLayout(arrow_layout)
-        
-        # Rotation buttons
-        rotate_layout = QHBoxLayout()
-        
-        rotate_left_btn = QPushButton("Rotate L")
-        rotate_left_btn.pressed.connect(lambda: self._move('rotate_left'))
-        rotate_left_btn.released.connect(lambda: self._stop_move())
-        
-        rotate_right_btn = QPushButton("Rotate R")
-        rotate_right_btn.pressed.connect(lambda: self._move('rotate_right'))
-        rotate_right_btn.released.connect(lambda: self._stop_move())
-        
-        rotate_layout.addWidget(rotate_left_btn)
-        rotate_layout.addWidget(rotate_right_btn)
-        
-        layout.addLayout(rotate_layout)
-        
-        # Speed control
-        speed_layout = QHBoxLayout()
-        speed_layout.addWidget(QLabel("Speed:"))
-        
-        self.speed_slider = QSlider(Qt.Horizontal)
-        self.speed_slider.setMinimum(10)
-        self.speed_slider.setMaximum(50)
-        self.speed_slider.setValue(30)
-        self.speed_slider.valueChanged.connect(self._update_speed)
-        
-        self.speed_label = QLabel("0.3")
-        self.speed_label.setMinimumWidth(40)
-        
-        speed_layout.addWidget(self.speed_slider)
-        speed_layout.addWidget(self.speed_label)
-        
-        layout.addLayout(speed_layout)
-        
-        group.setLayout(layout)
-        return group
-    
-    def _create_dance_group(self):
-        """Create dance control group."""
-        group = QGroupBox("💃 Dances")
-        layout = QGridLayout()
-        
-        dances = [
-            ("👋\nWave", "wave"),
-            ("💃\nSpecial", "special"),
-            ("🤖\nRobot", "robot"),
-            ("🌙\nMoonwalk", "moonwalk")
-        ]
-        
-        for i, (text, dance_id) in enumerate(dances):
-            btn = QPushButton(text)
-            btn.setObjectName("danceButton")
-            btn.setMinimumHeight(70)
-            btn.clicked.connect(lambda checked, d=dance_id: self._trigger_dance(d))
-            layout.addWidget(btn, i // 2, i % 2)
-        
-        group.setLayout(layout)
-        return group
-    
-    def _create_audio_group(self):
-        """Create audio control group."""
-        group = QGroupBox("🎤 Audio & Voice")
-        layout = QVBoxLayout()
-        
-        # Live mic toggle
-        mic_layout = QHBoxLayout()
-        
-        self.mic_button = QPushButton("🎙️ LIVE MIC")
-        self.mic_button.setObjectName("toggleButton")
-        self.mic_button.setCheckable(True)
-        self.mic_button.setMinimumHeight(50)
-        self.mic_button.toggled.connect(self._toggle_mic)
-        
-        self.mic_indicator = QLabel("⚫ OFF")
-        self.mic_indicator.setStyleSheet("font-size: 16px; font-weight: bold;")
-        
-        mic_layout.addWidget(self.mic_button)
-        mic_layout.addWidget(self.mic_indicator)
-        
-        layout.addLayout(mic_layout)
-        
-        # Voice commands toggle
-        voice_layout = QHBoxLayout()
-        
-        self.voice_button = QPushButton("🗣️ VOICE COMMANDS")
-        self.voice_button.setObjectName("toggleButton")
-        self.voice_button.setCheckable(True)
-        self.voice_button.setMinimumHeight(50)
-        self.voice_button.toggled.connect(self._toggle_voice_commands)
-        
-        self.voice_indicator = QLabel("⚫ OFF")
-        self.voice_indicator.setStyleSheet("font-size: 16px; font-weight: bold;")
-        
-        voice_layout.addWidget(self.voice_button)
-        voice_layout.addWidget(self.voice_indicator)
-        
-        layout.addLayout(voice_layout)
-        
-        # Voice commands help
-        help_label = QLabel("Say: 'Hi Pepper I'm [Name]' for handshake\n"
-                           "Full NLP with Pepper's mics - no external services!")
-        help_label.setStyleSheet("color: #8e8e8e; font-size: 11px; font-style: italic;")
-        help_label.setWordWrap(True)
-        layout.addWidget(help_label)
-        
-        # Volume control
-        volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("🔊 Volume:"))
-        
-        self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setMinimum(0)
-        self.volume_slider.setMaximum(100)
-        self.volume_slider.setValue(80)
-        
-        self.volume_label = QLabel("80%")
-        self.volume_label.setMinimumWidth(40)
-        self.volume_slider.valueChanged.connect(self._update_volume)
-        
-        volume_layout.addWidget(self.volume_slider)
-        volume_layout.addWidget(self.volume_label)
-        
-        layout.addLayout(volume_layout)
-        
-        group.setLayout(layout)
-        return group
-    
-    def _create_tablet_group(self):
-        """Create tablet mode control group."""
-        group = QGroupBox("📱 Tablet Display")
-        layout = QVBoxLayout()
-        
-        self.tablet_buttons = QButtonGroup()
-        
-        modes = [
-            ("Status", "status"),
-            ("Camera - Pepper", "camera_pepper"),
-            ("Camera - HoverCam", "camera_hover"),
-            ("Greeting", "greeting")
-        ]
-        
-        for text, mode_id in modes:
-            radio = QRadioButton(text)
-            radio.toggled.connect(lambda checked, m=mode_id: self._change_tablet_mode(m) if checked else None)
-            self.tablet_buttons.addButton(radio)
-            layout.addWidget(radio)
-        
-        # Set default
-        self.tablet_buttons.buttons()[0].setChecked(True)
-        
-        # Additional buttons
-        button_layout = QHBoxLayout()
-        
-        status_btn = QPushButton("📊 Show Status")
-        status_btn.clicked.connect(lambda: self._show_robot_status())
-        
-        greeting_btn = QPushButton("👋 Greeting")
-        greeting_btn.clicked.connect(lambda: self.tablet.show_greeting())
-        
-        button_layout.addWidget(status_btn)
-        button_layout.addWidget(greeting_btn)
-        
-        layout.addLayout(button_layout)
-        
-        group.setLayout(layout)
-        return group
-    
-    def _create_emergency_button(self):
-        """Create emergency stop button."""
-        btn = QPushButton("🚨 EMERGENCY STOP")
-        btn.setObjectName("emergencyButton")
-        btn.setMinimumHeight(70)
-        btn.clicked.connect(self.emergency_stop_signal.emit)
-        return btn
-    
-    # ========================================================================
-    # SLOT METHODS
-    # ========================================================================
-    
-    def _move(self, direction):
-        """Handle movement button press."""
-        base = self.controllers.get('base')
-        if not base:
-            self.status_update_signal.emit("Error: Base controller not found")
-            return
-        
-        if direction == 'forward':
-            base.set_continuous_velocity('x', 1.0)
-            self.tablet.set_action("Moving Forward", "")
-        elif direction == 'back':
-            base.set_continuous_velocity('x', -1.0)
-            self.tablet.set_action("Moving Backward", "")
-        elif direction == 'left':
-            base.set_continuous_velocity('y', 1.0)
-            self.tablet.set_action("Strafing Left", "")
-        elif direction == 'right':
-            base.set_continuous_velocity('y', -1.0)
-            self.tablet.set_action("Strafing Right", "")
-        elif direction == 'rotate_left':
-            base.set_continuous_velocity('theta', 1.0)
-            self.tablet.set_action("Rotating Left", "")
-        elif direction == 'rotate_right':
-            base.set_continuous_velocity('theta', -1.0)
-            self.tablet.set_action("Rotating Right", "")
-        
-        self.status_update_signal.emit(f"Moving: {direction}")
-    
-    def _stop_move(self):
-        """Stop movement."""
-        base = self.controllers.get('base')
-        if base:
-            base.stop()
-            self.tablet.set_action("Ready", "Waiting for input...")
-            self.status_update_signal.emit("Movement stopped")
-    
-    def _update_speed(self, value):
-        """Update movement speed."""
-        speed = value / 100.0
-        self.speed_label.setText(f"{speed:.1f}")
-        
-        base = self.controllers.get('base')
-        if base:
-            base.linear_speed = speed
-            self.status_update_signal.emit(f"Speed: {speed:.1f}")
-    
-    def _trigger_dance(self, dance_id):
-        """Trigger a dance animation."""
-        self.status_update_signal.emit(f"Dance: {dance_id}")
-        self.tablet.set_action(dance_id.capitalize(), "Starting...")
-        
-        # Execute dance in separate thread to avoid blocking
-        import threading
-        thread = threading.Thread(target=self._execute_dance, args=(dance_id,))
-        thread.daemon = True
-        thread.start()
-    
-    def _execute_dance(self, dance_id):
-        """Execute dance (runs in thread)."""
-        try:
-            if dance_id in self.dances:
-                self.dances[dance_id].perform()
-                self.tablet.set_action("Ready", f"{dance_id.capitalize()} complete")
-                self.status_update_signal.emit(f"Dance complete: {dance_id}")
-            else:
-                logger.error(f"Dance not found: {dance_id}")
-                self.status_update_signal.emit(f"Error: Dance '{dance_id}' not found")
-        except Exception as e:
-            logger.error(f"Dance error: {e}")
-            self.status_update_signal.emit(f"Dance failed: {e}")
-            self.tablet.set_action("Ready", "Dance failed")
-    
-    def _toggle_mic(self, checked):
-        """Toggle microphone streaming."""
-        if checked:
-            success = self.audio_streamer.start_streaming()
-            if success:
-                self.mic_indicator.setText("🔴 ON")
-                self.mic_indicator.setStyleSheet("color: #f87171; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Microphone: ON - Live streaming")
-            else:
-                self.mic_button.setChecked(False)
-                self.mic_indicator.setText("⚠️ ERROR")
-                self.mic_indicator.setStyleSheet("color: #fbbf24; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Microphone: Failed to start (install pyaudio)")
+    def _start_pepper_camera(self):
+        """Start Pepper camera feed."""
+        success = self.pepper_feed.start(self._on_pepper_frame)
+        if success:
+            self.pepper_start_btn.setEnabled(False)
+            self.pepper_stop_btn.setEnabled(True)
+            self.status_update_signal.emit("Pepper camera: Started")
         else:
-            self.audio_streamer.stop_streaming()
-            self.mic_indicator.setText("⚫ OFF")
-            self.mic_indicator.setStyleSheet("color: #8e8e8e; font-size: 16px; font-weight: bold;")
-            self.status_update_signal.emit("Microphone: OFF")
+            self.status_update_signal.emit("Pepper camera: Failed to start")
     
-    def _toggle_voice_commands(self, checked):
-        """Toggle voice command recognition."""
-        if checked:
-            success = self.voice_commander.start_listening()
-            if success:
-                self.voice_indicator.setText("🟢 LISTENING")
-                self.voice_indicator.setStyleSheet("color: #4ade80; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Voice commands: ON - Using Pepper's microphones")
-            else:
-                self.voice_button.setChecked(False)
-                self.voice_indicator.setText("⚠️ ERROR")
-                self.voice_indicator.setStyleSheet("color: #fbbf24; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Voice commands: Failed to start")
+    def _stop_pepper_camera(self):
+        """Stop Pepper camera feed."""
+        self.pepper_feed.stop()
+        self.pepper_display.clear_frame()
+        self.pepper_start_btn.setEnabled(True)
+        self.pepper_stop_btn.setEnabled(False)
+        self.status_update_signal.emit("Pepper camera: Stopped")
+    
+    def _start_external_camera(self):
+        """Start external camera feed."""
+        camera_id = self.camera_selector.currentIndex()
+        self.external_feed.camera_id = camera_id
+        
+        success = self.external_feed.start(self._on_external_frame)
+        if success:
+            self.external_start_btn.setEnabled(False)
+            self.external_stop_btn.setEnabled(True)
+            self.camera_selector.setEnabled(False)
+            self.status_update_signal.emit(f"External camera {camera_id}: Started")
         else:
-            self.voice_commander.stop_listening()
-            self.voice_indicator.setText("⚫ OFF")
-            self.voice_indicator.setStyleSheet("color: #8e8e8e; font-size: 16px; font-weight: bold;")
-            self.status_update_signal.emit("Voice commands: OFF")
+            self.status_update_signal.emit(f"External camera {camera_id}: Failed to start")
     
-    def _change_tablet_mode(self, mode_id):
-        """Change tablet display mode."""
-        self.status_update_signal.emit(f"Tablet: {mode_id}")
-        # TODO: Implement tablet mode switching
+    def _stop_external_camera(self):
+        """Stop external camera feed."""
+        self.external_feed.stop()
+        self.external_display.clear_frame()
+        self.external_start_btn.setEnabled(True)
+        self.external_stop_btn.setEnabled(False)
+        self.camera_selector.setEnabled(True)
+        self.status_update_signal.emit("External camera: Stopped")
     
-    def _update_volume(self, value):
-        """Update audio volume."""
-        self.volume_label.setText(f"{value}%")
-        self.audio_streamer.set_volume(value / 100.0)
+    def _on_pepper_frame(self, frame):
+        """Handle new Pepper camera frame."""
+        self.pepper_display.update_frame(frame)
     
-    def _show_robot_status(self):
-        """Show robot status dialog."""
-        try:
-            status = self.pepper.get_status()
-            if status:
-                message = f"Battery: {status.get('battery', 'Unknown')}%\n"
-                message += f"Stiffness: {status.get('stiffness', 'Unknown')}\n"
-                message += f"Connected: {status.get('connected', False)}"
-            else:
-                message = "Could not retrieve robot status.\nRobot may not be connected."
-            
-            QMessageBox.information(self, "Robot Status", message)
-        except Exception as e:
-            logger.error(f"Status dialog error: {e}")
-            QMessageBox.warning(self, "Error", f"Could not get status:\n{e}")
+    def _on_external_frame(self, frame):
+        """Handle new external camera frame."""
+        self.external_display.update_frame(frame)
+    
+    def _on_file_displayed(self, file_path, success):
+        """Handle file drop result."""
+        if success:
+            self.status_update_signal.emit(f"File displayed: {file_path}")
+        else:
+            self.status_update_signal.emit(f"Failed to display: {file_path}")
     
     def cleanup(self):
         """Cleanup resources."""
-        # Stop any ongoing operations
-        self._stop_move()
-        if self.mic_button.isChecked():
-            self.mic_button.setChecked(False)
-        if self.voice_button.isChecked():
-            self.voice_button.setChecked(False)
-        
-        # Cleanup audio
-        self.audio_streamer.cleanup()
-        
-        # Cleanup voice
-        self.voice_commander.stop_listening()
+        self._stop_pepper_camera()
+        self._stop_external_camera()

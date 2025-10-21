@@ -3,6 +3,7 @@ Main Entry Point for Pepper Keyboard Test Controller
 Orchestrates all components and starts the controller.
 
 Updated: Phase 2 - Added GUI support with PyQt5
+FIXED: Dance initialization order, proper imports
 """
 
 import sys
@@ -36,6 +37,7 @@ def run():
 Examples:
   python test_keyboard_control.py 192.168.1.100
   python -m test_controller.main --ip 192.168.1.100
+  python -m test_controller.main --ip 192.168.1.100 --gui
         """
     )
     
@@ -113,6 +115,15 @@ Examples:
         logger.info("Initializing tablet display...")
         tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
         
+        # FIXED: Initialize dances BEFORE GUI check so both modes have access
+        logger.info("Loading dance animations...")
+        dances = {
+            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
+            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
+            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
+            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
+        }
+        
         # Check if GUI mode requested
         if args.gui:
             logger.info("Launching GUI mode...")
@@ -133,25 +144,24 @@ Examples:
             # Launch GUI (blocking call)
             sys.exit(launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl))
         
-        # Initialize dances
-        logger.info("Loading dance animations...")
-        dances = {
-            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
-            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
-            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
-            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
-        }
-        
+        # KEYBOARD MODE (non-GUI)
         # Start base movement update thread (for continuous mode)
         def base_update_loop():
             while input_handler.running:
-                if input_handler.continuous_mode:
-                    base_ctrl.move_continuous()
-                time.sleep(0.05)  # 20Hz
+                try:
+                    if input_handler.continuous_mode:
+                        base_ctrl.move_continuous()
+                    time.sleep(0.05)  # 20Hz
+                except Exception as e:
+                    logger.error(f"Error in base update loop: {e}")
+                    break
         
         # Initialize input handler
         logger.info("Initializing keyboard input handler...")
-        input_handler = InputHandler(pepper_conn, base_ctrl, body_ctrl, video_ctrl, tablet_ctrl, dances)
+        input_handler = InputHandler(
+            pepper_conn, base_ctrl, body_ctrl, 
+            video_ctrl, tablet_ctrl, dances
+        )
         
         # Start base update thread
         base_thread = threading.Thread(target=base_update_loop, daemon=True)
@@ -182,10 +192,12 @@ Examples:
         try:
             if 'video_ctrl' in locals():
                 video_ctrl.stop()
+            if 'base_ctrl' in locals():
+                base_ctrl.stop()
             if 'pepper_conn' in locals():
                 pepper_conn.close()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
         logger.info("Goodbye!")
 
 if __name__ == "__main__":
