@@ -13,7 +13,6 @@ from .wave_dance import WaveDance
 from .special_dance import SpecialDance
 from .robot_dance import RobotDance
 from .moonwalk_dance import MoonwalkDance
-
 __all__ = [
     'BaseDance',
     'WaveDance',

@@ -3,7 +3,7 @@ Main Entry Point for Pepper Keyboard Test Controller
 Orchestrates all components and starts the controller.
 
 Updated: Phase 2 - Added GUI support with PyQt5
-FIXED: Dance initialization order, proper imports
+FIXED: Better error handling, optional video/tablet, proper cleanup
 """
 
 import sys
@@ -24,7 +24,14 @@ logger = logging.getLogger(__name__)
 from .controllers import PepperConnection, BaseController, BodyController, VideoController
 from .dances import WaveDance, SpecialDance, RobotDance, MoonwalkDance
 from .input_handler import InputHandler
-from .tablet import TabletController
+
+# Try to import tablet controller (optional)
+try:
+    from .tablet import TabletController
+    TABLET_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Tablet controller not available: {e}")
+    TABLET_AVAILABLE = False
 
 def run():
     """Main entry point for the test controller."""
@@ -61,6 +68,18 @@ Examples:
         help="Pepper robot's IP address (alternative)"
     )
     
+    parser.add_argument(
+        '--no-video',
+        action='store_true',
+        help="Disable video feed"
+    )
+    
+    parser.add_argument(
+        '--no-tablet',
+        action='store_true',
+        help="Disable tablet display"
+    )
+    
     args = parser.parse_args()
     
     # Get IP from either positional or flag argument
@@ -95,6 +114,14 @@ Examples:
     # INITIALIZE COMPONENTS
     # ========================================================================
     
+    pepper_conn = None
+    base_ctrl = None
+    body_ctrl = None
+    video_ctrl = None
+    tablet_ctrl = None
+    input_handler = None
+    base_thread = None
+    
     try:
         print("\n" + "="*60)
         print("  🤖 PEPPER KEYBOARD TEST CONTROLLER")
@@ -103,26 +130,78 @@ Examples:
         
         # Connect to Pepper
         logger.info("Initializing Pepper connection...")
-        pepper_conn = PepperConnection(pepper_ip)
+        try:
+            pepper_conn = PepperConnection(pepper_ip)
+        except Exception as e:
+            logger.error(f"Failed to connect to Pepper: {e}")
+            raise ConnectionError(f"Could not connect to Pepper at {pepper_ip}")
         
-        # Initialize controllers
+        # Initialize movement controllers
         logger.info("Initializing movement controllers...")
-        base_ctrl = BaseController(pepper_conn.motion)
-        body_ctrl = BodyController(pepper_conn.motion)
-        video_ctrl = VideoController(pepper_ip)
+        try:
+            base_ctrl = BaseController(pepper_conn.motion)
+            body_ctrl = BodyController(pepper_conn.motion)
+        except Exception as e:
+            logger.error(f"Failed to initialize controllers: {e}")
+            raise
         
-        # Initialize tablet display
-        logger.info("Initializing tablet display...")
-        tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
+        # Initialize video controller (optional)
+        if not args.no_video:
+            logger.info("Initializing video controller...")
+            try:
+                video_ctrl = VideoController(pepper_ip)
+                logger.info("✓ Video controller ready (press V to toggle)")
+            except Exception as e:
+                logger.warning(f"Video controller initialization failed: {e}")
+                logger.warning("Video feed will not be available")
+                video_ctrl = None
+        else:
+            logger.info("Video controller disabled (--no-video)")
+            video_ctrl = None
         
-        # FIXED: Initialize dances BEFORE GUI check so both modes have access
+        # Initialize tablet display (optional)
+        if not args.no_tablet and TABLET_AVAILABLE:
+            logger.info("Initializing tablet display...")
+            try:
+                tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
+                logger.info("✓ Tablet display ready")
+            except Exception as e:
+                logger.warning(f"Tablet initialization failed: {e}")
+                logger.warning("Tablet display will not be available")
+                tablet_ctrl = None
+        else:
+            if args.no_tablet:
+                logger.info("Tablet display disabled (--no-tablet)")
+            else:
+                logger.warning("Tablet module not available")
+            tablet_ctrl = None
+        
+        # Create dummy tablet controller if needed
+        if tablet_ctrl is None:
+            class DummyTablet:
+                def set_action(self, action, detail=""): pass
+                def set_movement_mode(self, mode): pass
+                def cycle_mode(self): pass
+                def show_greeting(self): pass
+                def get_current_mode(self): return "DISABLED"
+                def refresh_display(self): pass
+            
+            tablet_ctrl = DummyTablet()
+            logger.info("Using dummy tablet controller")
+        
+        # Initialize dances
         logger.info("Loading dance animations...")
-        dances = {
-            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
-            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
-            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
-            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
-        }
+        try:
+            dances = {
+                'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
+                'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
+                'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
+                'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
+            }
+            logger.info(f"✓ Loaded {len(dances)} dance animations")
+        except Exception as e:
+            logger.error(f"Failed to load dances: {e}")
+            raise
         
         # Check if GUI mode requested
         if args.gui:
@@ -131,23 +210,29 @@ Examples:
                 from .gui import launch_gui
             except ImportError as e:
                 logger.error(f"Failed to import GUI: {e}")
-                logger.error("Install GUI dependencies: pip install PyQt5 pyaudio")
+                logger.error("Install GUI dependencies: pip install -r requirements_gui.txt")
                 sys.exit(1)
             
             # Package controllers for GUI
             controllers_dict = {
                 'base': base_ctrl,
-                'body': body_ctrl,
-                'video': video_ctrl
+                'body': body_ctrl
             }
+            
+            # Add video only if initialized
+            if video_ctrl:
+                controllers_dict['video'] = video_ctrl
             
             # Launch GUI (blocking call)
             sys.exit(launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl))
         
+        # ====================================================================
         # KEYBOARD MODE (non-GUI)
+        # ====================================================================
+        
         # Start base movement update thread (for continuous mode)
         def base_update_loop():
-            while input_handler.running:
+            while input_handler and input_handler.running:
                 try:
                     if input_handler.continuous_mode:
                         base_ctrl.move_continuous()
@@ -158,10 +243,14 @@ Examples:
         
         # Initialize input handler
         logger.info("Initializing keyboard input handler...")
-        input_handler = InputHandler(
-            pepper_conn, base_ctrl, body_ctrl, 
-            video_ctrl, tablet_ctrl, dances
-        )
+        try:
+            input_handler = InputHandler(
+                pepper_conn, base_ctrl, body_ctrl, 
+                video_ctrl, tablet_ctrl, dances
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize input handler: {e}")
+            raise
         
         # Start base update thread
         base_thread = threading.Thread(target=base_update_loop, daemon=True)
@@ -189,15 +278,36 @@ Examples:
     finally:
         # Cleanup
         logger.info("\nShutting down...")
-        try:
-            if 'video_ctrl' in locals():
+        
+        # Stop input handler
+        if input_handler:
+            input_handler.running = False
+        
+        # Wait for base thread to finish
+        if base_thread and base_thread.is_alive():
+            base_thread.join(timeout=1.0)
+        
+        # Stop video
+        if video_ctrl:
+            try:
                 video_ctrl.stop()
-            if 'base_ctrl' in locals():
+            except Exception as e:
+                logger.debug(f"Error stopping video: {e}")
+        
+        # Stop base movement
+        if base_ctrl:
+            try:
                 base_ctrl.stop()
-            if 'pepper_conn' in locals():
+            except Exception as e:
+                logger.debug(f"Error stopping base: {e}")
+        
+        # Close Pepper connection
+        if pepper_conn:
+            try:
                 pepper_conn.close()
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            except Exception as e:
+                logger.debug(f"Error closing connection: {e}")
+        
         logger.info("Goodbye!")
 
 if __name__ == "__main__":

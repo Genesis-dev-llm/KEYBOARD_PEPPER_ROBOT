@@ -1,24 +1,39 @@
 """
 Camera Panel - Dual video feed display
 Left side panel with Pepper camera + external camera feeds.
+FIXED: Better error handling, graceful degradation
 """
 
 import logging
 import threading
 import time
-import cv2
-import numpy as np
 import urllib.request
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QGroupBox, QComboBox, QSplitter
+    QPushButton, QGroupBox, QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
-from .file_handler import FileDropPanel
-
 logger = logging.getLogger(__name__)
+
+# Try to import cv2 and numpy (optional)
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    logger.warning("OpenCV not available - video feeds will be disabled")
+    CV2_AVAILABLE = False
+
+# Try to import file handler (optional)
+try:
+    from .file_handler import FileDropPanel
+    FILE_HANDLER_AVAILABLE = True
+except ImportError:
+    logger.warning("File handler not available")
+    FILE_HANDLER_AVAILABLE = False
+
 
 class VideoDisplay(QLabel):
     """Widget for displaying video frames."""
@@ -37,6 +52,9 @@ class VideoDisplay(QLabel):
     
     def update_frame(self, frame):
         """Update with new video frame (numpy array)."""
+        if not CV2_AVAILABLE:
+            return
+        
         try:
             # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -77,6 +95,10 @@ class PepperCameraFeed:
     
     def start(self, callback):
         """Start streaming with frame callback."""
+        if not CV2_AVAILABLE:
+            logger.error("Cannot start camera - OpenCV not available")
+            return False
+        
         if self.is_running:
             return False
         
@@ -134,6 +156,10 @@ class ExternalCameraFeed:
     
     def start(self, callback):
         """Start streaming."""
+        if not CV2_AVAILABLE:
+            logger.error("Cannot start camera - OpenCV not available")
+            return False
+        
         if self.is_running:
             return False
         
@@ -189,9 +215,13 @@ class CameraPanel(QWidget):
         self.robot_ip = robot_ip
         self.tablet = tablet_ctrl
         
-        # Camera feeds
-        self.pepper_feed = PepperCameraFeed(robot_ip)
-        self.external_feed = ExternalCameraFeed(camera_id=0)
+        # Camera feeds (only if CV2 available)
+        if CV2_AVAILABLE:
+            self.pepper_feed = PepperCameraFeed(robot_ip)
+            self.external_feed = ExternalCameraFeed(camera_id=0)
+        else:
+            self.pepper_feed = None
+            self.external_feed = None
         
         self._init_ui()
     
@@ -199,6 +229,26 @@ class CameraPanel(QWidget):
         """Initialize UI."""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+        
+        if not CV2_AVAILABLE:
+            # Show message if OpenCV not available
+            msg_label = QLabel(
+                "📹 Camera feeds unavailable\n\n"
+                "Install OpenCV to enable:\n"
+                "pip install opencv-python"
+            )
+            msg_label.setAlignment(Qt.AlignCenter)
+            msg_label.setStyleSheet("""
+                QLabel {
+                    background-color: #2d2d30;
+                    color: #8e8e8e;
+                    padding: 40px;
+                    border-radius: 10px;
+                    font-size: 14px;
+                }
+            """)
+            layout.addWidget(msg_label)
+            return
         
         # === PEPPER CAMERA ===
         pepper_group = QGroupBox("📹 Pepper Camera")
@@ -250,17 +300,30 @@ class CameraPanel(QWidget):
         external_layout.addLayout(external_controls)
         external_group.setLayout(external_layout)
         
-        # === FILE DROP ZONE ===
-        self.file_drop_panel = FileDropPanel(self.tablet, self.session)
-        self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
+        # === FILE DROP ZONE (if available) ===
+        if FILE_HANDLER_AVAILABLE:
+            try:
+                self.file_drop_panel = FileDropPanel(self.tablet, self.session)
+                self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
+            except Exception as e:
+                logger.warning(f"Could not create file drop panel: {e}")
+                self.file_drop_panel = None
+        else:
+            self.file_drop_panel = None
         
         # Add all to main layout
         layout.addWidget(pepper_group, 1)
         layout.addWidget(external_group, 1)
-        layout.addWidget(self.file_drop_panel, 0)
+        
+        if self.file_drop_panel:
+            layout.addWidget(self.file_drop_panel, 0)
     
     def _start_pepper_camera(self):
         """Start Pepper camera feed."""
+        if not self.pepper_feed:
+            self.status_update_signal.emit("Pepper camera: Not available")
+            return
+        
         success = self.pepper_feed.start(self._on_pepper_frame)
         if success:
             self.pepper_start_btn.setEnabled(False)
@@ -271,14 +334,19 @@ class CameraPanel(QWidget):
     
     def _stop_pepper_camera(self):
         """Stop Pepper camera feed."""
-        self.pepper_feed.stop()
-        self.pepper_display.clear_frame()
-        self.pepper_start_btn.setEnabled(True)
-        self.pepper_stop_btn.setEnabled(False)
-        self.status_update_signal.emit("Pepper camera: Stopped")
+        if self.pepper_feed:
+            self.pepper_feed.stop()
+            self.pepper_display.clear_frame()
+            self.pepper_start_btn.setEnabled(True)
+            self.pepper_stop_btn.setEnabled(False)
+            self.status_update_signal.emit("Pepper camera: Stopped")
     
     def _start_external_camera(self):
         """Start external camera feed."""
+        if not self.external_feed:
+            self.status_update_signal.emit("External camera: Not available")
+            return
+        
         camera_id = self.camera_selector.currentIndex()
         self.external_feed.camera_id = camera_id
         
@@ -293,12 +361,13 @@ class CameraPanel(QWidget):
     
     def _stop_external_camera(self):
         """Stop external camera feed."""
-        self.external_feed.stop()
-        self.external_display.clear_frame()
-        self.external_start_btn.setEnabled(True)
-        self.external_stop_btn.setEnabled(False)
-        self.camera_selector.setEnabled(True)
-        self.status_update_signal.emit("External camera: Stopped")
+        if self.external_feed:
+            self.external_feed.stop()
+            self.external_display.clear_frame()
+            self.external_start_btn.setEnabled(True)
+            self.external_stop_btn.setEnabled(False)
+            self.camera_selector.setEnabled(True)
+            self.status_update_signal.emit("External camera: Stopped")
     
     def _on_pepper_frame(self, frame):
         """Handle new Pepper camera frame."""
@@ -317,5 +386,6 @@ class CameraPanel(QWidget):
     
     def cleanup(self):
         """Cleanup resources."""
-        self._stop_pepper_camera()
-        self._stop_external_camera()
+        if CV2_AVAILABLE:
+            self._stop_pepper_camera()
+            self._stop_external_camera()

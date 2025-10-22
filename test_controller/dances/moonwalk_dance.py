@@ -10,7 +10,7 @@ from .. import config
 
 logger = logging.getLogger(__name__)
 
-class UltimateMoonwalkDance(BaseDance):
+class MoonwalkDance:
     """
     Enhanced moonwalk with:
     - Alternating leg movements (simulated weight shift)
