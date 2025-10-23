@@ -1,8 +1,6 @@
 """
 Base Movement Controller
 Handles Pepper's wheel-based movement (translation and rotation).
-
-FIXED: Thread safety, error handling, position overflow protection
 """
 
 import logging
@@ -29,51 +27,31 @@ class BaseController:
         self.accumulated_x = 0.0
         self.accumulated_y = 0.0
         self.accumulated_theta = 0.0
-        
-        # Safety limits for accumulated position
-        self.MAX_ACCUMULATED = 10.0  # Maximum 10 meters in any direction
     
     def move_continuous(self):
-        """
-        Update base movement in continuous mode (called repeatedly).
-        FIXED: Added thread safety and error handling.
-        """
-        try:
-            if abs(self.base_x) > 0.01 or abs(self.base_y) > 0.01 or abs(self.base_theta) > 0.01:
-                self.motion.moveToward(self.base_x, self.base_y, self.base_theta)
-            else:
-                self.motion.stopMove()
-        except Exception as e:
-            logger.error(f"Error in continuous movement: {e}")
-            # Try to stop safely
-            try:
-                self.motion.stopMove()
-            except:
-                pass
+        """Update base movement in continuous mode (called repeatedly)."""
+        if abs(self.base_x) > 0.01 or abs(self.base_y) > 0.01 or abs(self.base_theta) > 0.01:
+            self.motion.moveToward(self.base_x, self.base_y, self.base_theta)
+        else:
+            self.motion.stopMove()
     
     def move_incremental(self, direction):
-        """
-        Move by a fixed step in incremental mode.
-        FIXED: Added position overflow protection.
-        """
+        """Move by a fixed step in incremental mode."""
         if direction == 'forward':
-            self.accumulated_x = min(self.accumulated_x + config.LINEAR_STEP, self.MAX_ACCUMULATED)
+            self.accumulated_x += config.LINEAR_STEP
         elif direction == 'back':
-            self.accumulated_x = max(self.accumulated_x - config.LINEAR_STEP, -self.MAX_ACCUMULATED)
+            self.accumulated_x -= config.LINEAR_STEP
         elif direction == 'left':
-            self.accumulated_y = min(self.accumulated_y + config.LINEAR_STEP, self.MAX_ACCUMULATED)
+            self.accumulated_y += config.LINEAR_STEP
         elif direction == 'right':
-            self.accumulated_y = max(self.accumulated_y - config.LINEAR_STEP, -self.MAX_ACCUMULATED)
+            self.accumulated_y -= config.LINEAR_STEP
         elif direction == 'rotate_left':
             self.accumulated_theta += config.ANGULAR_STEP
         elif direction == 'rotate_right':
             self.accumulated_theta -= config.ANGULAR_STEP
         
-        try:
-            self.motion.moveTo(self.accumulated_x, self.accumulated_y, self.accumulated_theta)
-            logger.info(f"Position: ({self.accumulated_x:.2f}, {self.accumulated_y:.2f}, {self.accumulated_theta:.2f})")
-        except Exception as e:
-            logger.error(f"Failed to move: {e}")
+        self.motion.moveTo(self.accumulated_x, self.accumulated_y, self.accumulated_theta)
+        logger.info(f"Position: ({self.accumulated_x:.2f}, {self.accumulated_y:.2f}, {self.accumulated_theta:.2f})")
     
     def reset_position(self):
         """Reset accumulated position to origin."""
@@ -96,10 +74,7 @@ class BaseController:
         self.base_x = 0.0
         self.base_y = 0.0
         self.base_theta = 0.0
-        try:
-            self.motion.stopMove()
-        except Exception as e:
-            logger.error(f"Error stopping movement: {e}")
+        self.motion.stopMove()
     
     def increase_speed(self):
         """Increase base movement speed."""

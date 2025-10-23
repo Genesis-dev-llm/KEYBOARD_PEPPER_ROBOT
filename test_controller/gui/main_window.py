@@ -1,87 +1,92 @@
 """
 Main Window for Pepper Control Center
-FIXED: Added movement timer, better cleanup, camera panel integration
+Professional PyQt5 GUI with resizable/movable window.
 """
+
 import sys
 import os
 import json
 import logging
 from PyQt5.QtWidgets import (
-QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-QSplitter, QStatusBar, QMessageBox, QApplication
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QSplitter, QStatusBar, QMessageBox, QApplication
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon, QFont
+
 from .styles import apply_theme
-from .control_panel import ControlPanel
 from .camera_panel import CameraPanel
+from .control_panel import ControlPanel
+
 logger = logging.getLogger(__name__)
+
 class PepperControlGUI(QMainWindow):
     """Main window for Pepper robot control interface."""
+    
     # Signals for inter-component communication
-emergency_stop_signal = pyqtSignal()
-
-def __init__(self, pepper_conn, controllers, dances, tablet_ctrl):
-    super().__init__()
+    emergency_stop_signal = pyqtSignal()
     
-    # Store references
-    self.pepper = pepper_conn
-    self.controllers = controllers
-    self.dances = dances
-    self.tablet = tablet_ctrl
+    def __init__(self, pepper_conn, controllers, dances, tablet_ctrl):
+        super().__init__()
+        
+        # Store references
+        self.pepper = pepper_conn
+        self.controllers = controllers
+        self.dances = dances
+        self.tablet = tablet_ctrl
+        
+        # Configuration file path
+        self.config_file = os.path.expanduser('~/.pepper_gui_config.json')
+        
+        # Initialize UI
+        self._init_ui()
+        self._load_settings()
+        self._setup_status_bar()
+        self._setup_connections()
+        
+        # Start status update timer
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self._update_status)
+        self.status_timer.start(1000)  # Update every second
+        
+        # Start base movement update timer (for continuous movement)
+        self.movement_timer = QTimer()
+        self.movement_timer.timeout.connect(self._update_movement)
+        self.movement_timer.start(50)  # 20Hz for smooth movement
     
-    # Configuration file path
-    self.config_file = os.path.expanduser('~/.pepper_gui_config.json')
-    
-    # Initialize UI
-    self._init_ui()
-    self._load_settings()
-    self._setup_status_bar()
-    self._setup_connections()
-    
-    # Start status update timer
-    self.status_timer = QTimer()
-    self.status_timer.timeout.connect(self._update_status)
-    self.status_timer.start(1000)  # Update every second
-    
-    # FIXED: Start base movement update timer (for continuous movement)
-    self.movement_timer = QTimer()
-    self.movement_timer.timeout.connect(self._update_movement)
-    self.movement_timer.start(50)  # 20Hz for smooth movement
-
-def _init_ui(self):
-    """Initialize the user interface."""
-    # Window properties
-    self.setWindowTitle("🤖 Pepper Control Center")
-    self.setMinimumSize(800, 600)
-    
-    # Default size (will be overridden by saved settings)
-    self.resize(1200, 800)
-    
-    # Create menu bar
-    self._create_menu_bar()
-    
-    # Central widget
-    central_widget = QWidget()
-    self.setCentralWidget(central_widget)
-    
-    # Main layout
-    main_layout = QVBoxLayout(central_widget)
-    main_layout.setContentsMargins(10, 10, 10, 10)
-    main_layout.setSpacing(10)
-    
-    # Create main splitter (left: camera panel, right: controls)
-    self.main_splitter = QSplitter(Qt.Horizontal)
+    def _init_ui(self):
+        """Initialize the user interface."""
+        # Window properties
+        self.setWindowTitle("🤖 Pepper Control Center")
+        self.setMinimumSize(800, 600)
+        
+        # Default size (will be overridden by saved settings)
+        self.resize(1200, 800)
+        
+        # Create menu bar
+        self._create_menu_bar()
+        
+        # Central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Main layout
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
+        
+        # Create main splitter (left: cameras, right: controls)
+        self.main_splitter = QSplitter(Qt.Horizontal)
         
         # Left panel - Camera feeds
-    self.camera_panel = CameraPanel(
+        self.camera_panel = CameraPanel(
             self.pepper.session,
             self.pepper.ip,
             self.tablet
         )
         
         # Right panel - Controls
-    self.control_panel = ControlPanel(
+        self.control_panel = ControlPanel(
             self.controllers,
             self.dances,
             self.tablet,
@@ -89,17 +94,17 @@ def _init_ui(self):
         )
         
         # Add panels to splitter
-    self.main_splitter.addWidget(self.camera_panel)
-    self.main_splitter.addWidget(self.control_panel)
+        self.main_splitter.addWidget(self.camera_panel)
+        self.main_splitter.addWidget(self.control_panel)
         
-        # Initial sizes (60% left, 40% controls)
-    self.main_splitter.setSizes([720, 480])
+        # Initial sizes (60% cameras, 40% controls)
+        self.main_splitter.setSizes([720, 480])
         
         # Add splitter to main layout
-    main_layout.addWidget(self.main_splitter)
+        main_layout.addWidget(self.main_splitter)
         
         # Connect emergency stop
-    self.control_panel.emergency_stop_signal.connect(self._emergency_stop)
+        self.control_panel.emergency_stop_signal.connect(self._emergency_stop)
     
     def _create_menu_bar(self):
         """Create menu bar with File and Help menus."""
@@ -132,51 +137,11 @@ def _init_ui(self):
         about_action.triggered.connect(self._show_about)
     
     def _show_robot_status_dialog(self):
-        """Show robot status dialog."""
-        try:
-            status = self.pepper.get_status()
-            if status:
-                message = f"Battery: {status.get('battery', 'Unknown')}%\n"
-                message += f"Stiffness: {status.get('stiffness', 'Unknown')}\n"
-                message += f"Connected: {status.get('connected', False)}"
-            else:
-                message = "Could not retrieve robot status.\nRobot may not be connected."
-            
-            QMessageBox.information(self, "Robot Status", message)
-        except Exception as e:
-            logger.error(f"Status dialog error: {e}")
-            QMessageBox.warning(self, "Error", f"Could not get status:\n{e}")
-    
-    def _show_shortcuts_help(self):
-        """Show keyboard shortcuts help dialog."""
-        help_text = """
-<h2>Keyboard Shortcuts</h2>
-
-<h3>Window Controls:</h3>
-<table>
-<tr><td><b>F1</b></td><td>Show this help</td></tr>
-<tr><td><b>F11</b></td><td>Toggle fullscreen</td></tr>
-<tr><td><b>Ctrl+Q</b></td><td>Quit application</td></tr>
-<tr><td><b>ESC</b></td><td>Emergency stop (or exit fullscreen)</td></tr>
-</table>
-
-<h3>Robot Controls:</h3>
-<p><i>Use GUI buttons for control</i></p>
-
-<h3>Camera Controls:</h3>
-<p><i>Click camera panel buttons</i></p>
-<ul>
-<li>Switch camera source to tablet</li>
-<li>Take snapshot (saved to ~/pepper_snapshots/)</li>
-<li>Drag & drop files to display on tablet</li>
-</ul>
-        """
-        
-        QMessageBox.information(
-            self,
-            "Keyboard Shortcuts",
-            help_text
-        )
+        """Show robot status dialog (wrapper for control panel method)."""
+        if hasattr(self, 'control_panel'):
+            self.control_panel._show_robot_status()
+        else:
+            QMessageBox.warning(self, "Error", "Control panel not initialized")
     
     def _show_about(self):
         """Show about dialog."""
@@ -189,15 +154,15 @@ def _init_ui(self):
 <h3>Features:</h3>
 <ul>
 <li>Real-time robot control</li>
+<li>Dual camera feeds (Pepper + External)</li>
+<li>Live audio streaming</li>
 <li>Dance animations</li>
 <li>Tablet display management</li>
-<li>Live camera feeds (Pepper + HoverCam)</li>
 <li>Drag & drop file display</li>
-<li>Voice commands (experimental)</li>
 </ul>
 
-<p><i>Built for Educational & Research Purposes</i></p>
-<p>© 2025 Pepper Control Center Team</p>
+<p><i>Built for VR Teleoperation Research</i></p>
+<p>© 2025 Pepper VR Team</p>
         """
         QMessageBox.about(self, "About Pepper Control Center", about_text)
     
@@ -207,15 +172,16 @@ def _init_ui(self):
         self.setStatusBar(self.status_bar)
         
         # Status labels
-        from PyQt5.QtWidgets import QLabel
         self.connection_label = self._create_status_label("🔴 Disconnected")
         self.battery_label = self._create_status_label("🔋 ---%")
         self.mode_label = self._create_status_label("Mode: --")
+        self.tablet_label = self._create_status_label("Tablet: --")
         
         # Add to status bar
         self.status_bar.addPermanentWidget(self.connection_label)
         self.status_bar.addPermanentWidget(self.battery_label)
         self.status_bar.addPermanentWidget(self.mode_label)
+        self.status_bar.addPermanentWidget(self.tablet_label)
         
         # Initial update
         self._update_status()
@@ -241,15 +207,6 @@ def _init_ui(self):
         # Connect control panel signals
         self.control_panel.status_update_signal.connect(self._handle_status_update)
     
-    def _update_movement(self):
-        """Update continuous base movement."""
-        try:
-            base = self.controllers.get('base')
-            if base:
-                base.move_continuous()
-        except Exception as e:
-            logger.error(f"Error updating movement: {e}")
-    
     def _update_status(self):
         """Update status bar information."""
         try:
@@ -265,7 +222,7 @@ def _init_ui(self):
                     "QLabel { color: #f87171; }")
             
             # Battery level
-            battery = status.get('battery', 0) if status else 0
+            battery = status.get('battery', 0)
             self.battery_label.setText(f"🔋 {battery}%")
             if battery >= 60:
                 color = "#4ade80"
@@ -288,8 +245,21 @@ def _init_ui(self):
                 mode = "UNKNOWN"
             self.mode_label.setText(f"Mode: {mode}")
             
+            # Tablet mode
+            tablet_mode = str(self.tablet.get_current_mode())
+            self.tablet_label.setText(f"Tablet: {tablet_mode}")
+            
         except Exception as e:
-            logger.error(f"Error updating status: {e}")
+            print(f"Error updating status: {e}")
+    
+    def _update_movement(self):
+        """Update continuous base movement (called at 20Hz)."""
+        try:
+            base = self.controllers.get('base')
+            if base:
+                base.move_continuous()
+        except Exception as e:
+            logger.error(f"Movement update error: {e}")
     
     def _handle_status_update(self, message):
         """Handle status update messages from control panel."""
@@ -309,7 +279,7 @@ def _init_ui(self):
                 QMessageBox.Ok
             )
         except Exception as e:
-            logger.error(f"Error during emergency stop: {e}")
+            print(f"Error during emergency stop: {e}")
     
     def _load_settings(self):
         """Load window settings from config file."""
@@ -328,9 +298,9 @@ def _init_ui(self):
                 if 'splitter' in settings:
                     self.main_splitter.setSizes(settings['splitter'])
                 
-                logger.info("✓ Loaded GUI settings")
+                print("✓ Loaded GUI settings")
         except Exception as e:
-            logger.warning(f"Could not load GUI settings: {e}")
+            print(f"Could not load GUI settings: {e}")
     
     def _save_settings(self):
         """Save window settings to config file."""
@@ -348,9 +318,9 @@ def _init_ui(self):
             with open(self.config_file, 'w') as f:
                 json.dump(settings, f, indent=2)
             
-            logger.info("✓ Saved GUI settings")
+            print("✓ Saved GUI settings")
         except Exception as e:
-            logger.warning(f"Could not save GUI settings: {e}")
+            print(f"Could not save GUI settings: {e}")
     
     def closeEvent(self, event):
         """Handle window close event."""
@@ -373,18 +343,11 @@ def _init_ui(self):
             if hasattr(self, 'movement_timer'):
                 self.movement_timer.stop()
             
-            # Cleanup panels
+            # Cleanup panels (this will cleanup audio/camera)
             if hasattr(self, 'control_panel'):
-                try:
-                    self.control_panel.cleanup()
-                except Exception as e:
-                    logger.error(f"Error cleaning up control panel: {e}")
-            
+                self.control_panel.cleanup()
             if hasattr(self, 'camera_panel'):
-                try:
-                    self.camera_panel.cleanup()
-                except Exception as e:
-                    logger.error(f"Error cleaning up camera panel: {e}")
+                self.camera_panel.cleanup()
             
             # Accept close
             event.accept()
@@ -417,6 +380,39 @@ def _init_ui(self):
         
         else:
             super().keyPressEvent(event)
+    
+    def _show_shortcuts_help(self):
+        """Show keyboard shortcuts help dialog."""
+        help_text = """
+<h2>Keyboard Shortcuts</h2>
+
+<h3>Window Controls:</h3>
+<table>
+<tr><td><b>F1</b></td><td>Show this help</td></tr>
+<tr><td><b>F11</b></td><td>Toggle fullscreen</td></tr>
+<tr><td><b>Ctrl+Q</b></td><td>Quit application</td></tr>
+<tr><td><b>ESC</b></td><td>Emergency stop (or exit fullscreen)</td></tr>
+</table>
+
+<h3>Robot Controls:</h3>
+<p><i>All keyboard controls from the keyboard tester still work!</i></p>
+<table>
+<tr><td><b>Arrow Keys</b></td><td>Move robot</td></tr>
+<tr><td><b>Q/E</b></td><td>Rotate left/right</td></tr>
+<tr><td><b>1-4</b></td><td>Trigger dances</td></tr>
+<tr><td><b>M</b></td><td>Cycle tablet mode</td></tr>
+<tr><td><b>H</b></td><td>Show greeting</td></tr>
+<tr><td><b>SPACE</b></td><td>Stop movement</td></tr>
+</table>
+
+<p><i>Tip: You can use both GUI buttons and keyboard shortcuts!</i></p>
+        """
+        
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            help_text
+        )
 
 
 def launch_gui(pepper_conn, controllers, dances, tablet_ctrl):
@@ -425,7 +421,7 @@ def launch_gui(pepper_conn, controllers, dances, tablet_ctrl):
     
     # Set application metadata
     app.setApplicationName("Pepper Control Center")
-    app.setOrganizationName("PepperControlCenter")
+    app.setOrganizationName("PepperVR")
     
     # Apply dark theme
     apply_theme(app)
@@ -441,7 +437,7 @@ def launch_gui(pepper_conn, controllers, dances, tablet_ctrl):
     logger.info("GUI closed, cleaning up...")
     try:
         pepper_conn.close()
-    except Exception as e:
-        logger.error(f"Error closing connection: {e}")
+    except:
+        pass
     
     return exit_code

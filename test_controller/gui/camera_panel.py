@@ -1,212 +1,26 @@
 """
-Camera Panel - Dual video feed display
-Left side panel with Pepper camera + external camera feeds.
-FIXED: Better error handling, graceful degradation
+Camera Panel - Display video feeds
+Shows Pepper's camera and HoverCam (USB) feeds.
 """
 
+import os
 import logging
-import threading
-import time
-import urllib.request
+import datetime
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QGroupBox, QComboBox
+    QPushButton, QGroupBox, QFrame, QMessageBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
+import cv2
+import numpy as np
+
+from .file_handler import FileDropPanel
 
 logger = logging.getLogger(__name__)
 
-# Try to import cv2 and numpy (optional)
-try:
-    import cv2
-    import numpy as np
-    CV2_AVAILABLE = True
-except ImportError:
-    logger.warning("OpenCV not available - video feeds will be disabled")
-    CV2_AVAILABLE = False
-
-# Try to import file handler (optional)
-try:
-    from .file_handler import FileDropPanel
-    FILE_HANDLER_AVAILABLE = True
-except ImportError:
-    logger.warning("File handler not available")
-    FILE_HANDLER_AVAILABLE = False
-
-
-class VideoDisplay(QLabel):
-    """Widget for displaying video frames."""
-    
-    def __init__(self, title="Camera"):
-        super().__init__()
-        
-        self.setObjectName("videoLabel")
-        self.setMinimumSize(320, 240)
-        self.setAlignment(Qt.AlignCenter)
-        self.setScaledContents(False)
-        
-        # Placeholder
-        self.setText(f"{title}\nNo feed")
-        self.setStyleSheet("background-color: #000; color: #666; font-size: 18px;")
-    
-    def update_frame(self, frame):
-        """Update with new video frame (numpy array)."""
-        if not CV2_AVAILABLE:
-            return
-        
-        try:
-            # Convert BGR to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_frame.shape
-            bytes_per_line = ch * w
-            
-            # Create QImage
-            qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            
-            # Scale to fit widget while maintaining aspect ratio
-            scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
-                self.width(), self.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-            
-            self.setPixmap(scaled_pixmap)
-            
-        except Exception as e:
-            logger.error(f"Error updating frame: {e}")
-    
-    def clear_frame(self):
-        """Clear the display."""
-        self.clear()
-        self.setText("No feed")
-
-
-class PepperCameraFeed:
-    """Manages Pepper's camera feed streaming."""
-    
-    def __init__(self, ip, port=8080):
-        self.ip = ip
-        self.port = port
-        self.video_url = f"http://{ip}:{port}/video_feed"
-        self.is_running = False
-        self.thread = None
-        self.frame_callback = None
-    
-    def start(self, callback):
-        """Start streaming with frame callback."""
-        if not CV2_AVAILABLE:
-            logger.error("Cannot start camera - OpenCV not available")
-            return False
-        
-        if self.is_running:
-            return False
-        
-        self.frame_callback = callback
-        self.is_running = True
-        self.thread = threading.Thread(target=self._stream_loop, daemon=True)
-        self.thread.start()
-        return True
-    
-    def stop(self):
-        """Stop streaming."""
-        self.is_running = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-    
-    def _stream_loop(self):
-        """Main streaming loop."""
-        try:
-            stream = urllib.request.urlopen(self.video_url, timeout=5)
-            bytes_data = b''
-            
-            while self.is_running:
-                bytes_data += stream.read(1024)
-                a = bytes_data.find(b'\xff\xd8')  # JPEG start
-                b = bytes_data.find(b'\xff\xd9')  # JPEG end
-                
-                if a != -1 and b != -1:
-                    jpg = bytes_data[a:b+2]
-                    bytes_data = bytes_data[b+2:]
-                    
-                    # Decode frame
-                    frame = cv2.imdecode(
-                        np.frombuffer(jpg, dtype=np.uint8),
-                        cv2.IMREAD_COLOR
-                    )
-                    
-                    if frame is not None and self.frame_callback:
-                        self.frame_callback(frame)
-                        
-        except Exception as e:
-            logger.error(f"Pepper camera stream error: {e}")
-        finally:
-            self.is_running = False
-
-
-class ExternalCameraFeed:
-    """Manages external webcam/HoverCam feed."""
-    
-    def __init__(self, camera_id=0):
-        self.camera_id = camera_id
-        self.capture = None
-        self.is_running = False
-        self.thread = None
-        self.frame_callback = None
-    
-    def start(self, callback):
-        """Start streaming."""
-        if not CV2_AVAILABLE:
-            logger.error("Cannot start camera - OpenCV not available")
-            return False
-        
-        if self.is_running:
-            return False
-        
-        try:
-            self.capture = cv2.VideoCapture(self.camera_id)
-            if not self.capture.isOpened():
-                logger.error(f"Cannot open camera {self.camera_id}")
-                return False
-            
-            self.frame_callback = callback
-            self.is_running = True
-            self.thread = threading.Thread(target=self._stream_loop, daemon=True)
-            self.thread.start()
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start external camera: {e}")
-            return False
-    
-    def stop(self):
-        """Stop streaming."""
-        self.is_running = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-        if self.capture:
-            self.capture.release()
-            self.capture = None
-    
-    def _stream_loop(self):
-        """Main streaming loop."""
-        while self.is_running and self.capture:
-            try:
-                ret, frame = self.capture.read()
-                if ret and self.frame_callback:
-                    self.frame_callback(frame)
-                time.sleep(0.033)  # ~30 FPS
-            except Exception as e:
-                logger.error(f"External camera error: {e}")
-                break
-        
-        self.is_running = False
-
-
 class CameraPanel(QWidget):
-    """Panel for dual camera feeds and file drop."""
-    
-    status_update_signal = pyqtSignal(str)
+    """Panel for displaying camera feeds."""
     
     def __init__(self, session, robot_ip, tablet_ctrl):
         super().__init__()
@@ -215,177 +29,259 @@ class CameraPanel(QWidget):
         self.robot_ip = robot_ip
         self.tablet = tablet_ctrl
         
-        # Camera feeds (only if CV2 available)
-        if CV2_AVAILABLE:
-            self.pepper_feed = PepperCameraFeed(robot_ip)
-            self.external_feed = ExternalCameraFeed(camera_id=0)
-        else:
-            self.pepper_feed = None
-            self.external_feed = None
+        # Camera captures
+        self.pepper_video = None
+        self.hovercam = None
+        self.pepper_subscriber_id = None
+        
+        # Update timer
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._update_frames)
         
         self._init_ui()
+        self._init_cameras()
     
     def _init_ui(self):
-        """Initialize UI."""
+        """Initialize the UI."""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         
-        if not CV2_AVAILABLE:
-            # Show message if OpenCV not available
-            msg_label = QLabel(
-                "📹 Camera feeds unavailable\n\n"
-                "Install OpenCV to enable:\n"
-                "pip install opencv-python"
-            )
-            msg_label.setAlignment(Qt.AlignCenter)
-            msg_label.setStyleSheet("""
-                QLabel {
-                    background-color: #2d2d30;
-                    color: #8e8e8e;
-                    padding: 40px;
-                    border-radius: 10px;
-                    font-size: 14px;
-                }
-            """)
-            layout.addWidget(msg_label)
-            return
-        
-        # === PEPPER CAMERA ===
-        pepper_group = QGroupBox("📹 Pepper Camera")
+        # === PEPPER'S CAMERA ===
+        pepper_group = QGroupBox("📹 Pepper's Camera")
         pepper_layout = QVBoxLayout()
         
-        self.pepper_display = VideoDisplay("Pepper's View")
-        pepper_layout.addWidget(self.pepper_display)
+        self.pepper_label = QLabel()
+        self.pepper_label.setObjectName("videoLabel")
+        self.pepper_label.setMinimumSize(400, 300)
+        self.pepper_label.setAlignment(Qt.AlignCenter)
+        self.pepper_label.setText("Initializing Pepper's camera...")
+        self.pepper_label.setStyleSheet("color: #8e8e8e;")
         
-        # Pepper camera controls
-        pepper_controls = QHBoxLayout()
-        
-        self.pepper_start_btn = QPushButton("▶ Start")
-        self.pepper_start_btn.clicked.connect(self._start_pepper_camera)
-        
-        self.pepper_stop_btn = QPushButton("⏹ Stop")
-        self.pepper_stop_btn.clicked.connect(self._stop_pepper_camera)
-        self.pepper_stop_btn.setEnabled(False)
-        
-        pepper_controls.addWidget(self.pepper_start_btn)
-        pepper_controls.addWidget(self.pepper_stop_btn)
-        
-        pepper_layout.addLayout(pepper_controls)
+        pepper_layout.addWidget(self.pepper_label)
         pepper_group.setLayout(pepper_layout)
+        layout.addWidget(pepper_group)
         
-        # === EXTERNAL CAMERA ===
-        external_group = QGroupBox("📷 External Camera")
-        external_layout = QVBoxLayout()
+        # === HOVERCAM ===
+        hover_group = QGroupBox("📷 HoverCam (External)")
+        hover_layout = QVBoxLayout()
         
-        self.external_display = VideoDisplay("HoverCam / Webcam")
-        external_layout.addWidget(self.external_display)
+        self.hover_label = QLabel()
+        self.hover_label.setObjectName("videoLabel")
+        self.hover_label.setMinimumSize(400, 300)
+        self.hover_label.setAlignment(Qt.AlignCenter)
+        self.hover_label.setText("Initializing HoverCam...")
+        self.hover_label.setStyleSheet("color: #8e8e8e;")
         
-        # External camera controls
-        external_controls = QHBoxLayout()
+        hover_layout.addWidget(self.hover_label)
+        hover_group.setLayout(hover_layout)
+        layout.addWidget(hover_group)
         
-        self.camera_selector = QComboBox()
-        self.camera_selector.addItems(["Camera 0", "Camera 1", "Camera 2"])
+        # === CONTROL BUTTONS ===
+        button_layout = QHBoxLayout()
         
-        self.external_start_btn = QPushButton("▶ Start")
-        self.external_start_btn.clicked.connect(self._start_external_camera)
+        self.switch_button = QPushButton("📷 Switch to Tablet")
+        self.switch_button.setToolTip("Send HoverCam feed to Pepper's tablet")
+        self.switch_button.clicked.connect(self._switch_camera_source)
         
-        self.external_stop_btn = QPushButton("⏹ Stop")
-        self.external_stop_btn.clicked.connect(self._stop_external_camera)
-        self.external_stop_btn.setEnabled(False)
+        self.snapshot_button = QPushButton("📸 Snapshot")
+        self.snapshot_button.setToolTip("Save current frame")
+        self.snapshot_button.clicked.connect(self._take_snapshot)
         
-        external_controls.addWidget(self.camera_selector)
-        external_controls.addWidget(self.external_start_btn)
-        external_controls.addWidget(self.external_stop_btn)
+        button_layout.addWidget(self.switch_button)
+        button_layout.addWidget(self.snapshot_button)
         
-        external_layout.addLayout(external_controls)
-        external_group.setLayout(external_layout)
+        layout.addLayout(button_layout)
         
-        # === FILE DROP ZONE (if available) ===
-        if FILE_HANDLER_AVAILABLE:
+        # Status label
+        self.status_label = QLabel("Status: Initializing...")
+        self.status_label.setStyleSheet("color: #8e8e8e; font-size: 11px;")
+        layout.addWidget(self.status_label)
+        
+        # === DRAG & DROP ZONE ===
+        drop_group = QGroupBox("📄 Tablet Display - Drag & Drop")
+        drop_layout = QVBoxLayout()
+        
+        self.file_drop_panel = FileDropPanel(self.tablet, self.session)
+        self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
+        
+        drop_layout.addWidget(self.file_drop_panel)
+        drop_group.setLayout(drop_layout)
+        layout.addWidget(drop_group)
+        
+        layout.addStretch()
+    
+    def _init_cameras(self):
+        """Initialize camera connections."""
+        try:
+            # Initialize Pepper's camera
+            self.pepper_video = self.session.service("ALVideoDevice")
+            self.pepper_subscriber_id = self.pepper_video.subscribeCamera(
+                "gui_feed", 0, 2, 11, 15  # Top camera, 640x480, RGB, 15fps
+            )
+            self.status_label.setText("Status: ✓ Pepper's camera connected")
+            
+            # Initialize HoverCam (USB camera)
+            self._detect_hovercam()
+            
+            # Start update timer
+            self.timer.start(33)  # ~30 FPS
+            
+        except Exception as e:
+            self.status_label.setText(f"Status: ⚠ Camera init error: {e}")
+            print(f"Camera initialization error: {e}")
+    
+    def _detect_hovercam(self):
+        """Detect and connect to HoverCam."""
+        # Try common camera indices
+        for cam_id in range(5):
             try:
-                self.file_drop_panel = FileDropPanel(self.tablet, self.session)
-                self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
+                cap = cv2.VideoCapture(cam_id)
+                if cap.isOpened():
+                    # Test read
+                    ret, frame = cap.read()
+                    if ret:
+                        self.hovercam = cap
+                        self.status_label.setText(f"Status: ✓ HoverCam found (device {cam_id})")
+                        print(f"✓ HoverCam detected on device {cam_id}")
+                        return
+                    else:
+                        cap.release()
+            except:
+                continue
+        
+        self.hover_label.setText("HoverCam not detected\n\nPlug in USB camera and restart")
+        print("⚠ HoverCam not detected")
+    
+    def _update_frames(self):
+        """Update video frames."""
+        # Update Pepper's camera
+        if self.pepper_video and self.pepper_subscriber_id:
+            try:
+                img_data = self.pepper_video.getImageRemote(self.pepper_subscriber_id)
+                if img_data:
+                    width, height, image_bytes = img_data[0], img_data[1], img_data[6]
+                    frame = np.frombuffer(image_bytes, dtype=np.uint8).reshape((height, width, 3))
+                    self._display_frame(frame, self.pepper_label)
             except Exception as e:
-                logger.warning(f"Could not create file drop panel: {e}")
-                self.file_drop_panel = None
-        else:
-            self.file_drop_panel = None
+                print(f"Error getting Pepper frame: {e}")
         
-        # Add all to main layout
-        layout.addWidget(pepper_group, 1)
-        layout.addWidget(external_group, 1)
-        
-        if self.file_drop_panel:
-            layout.addWidget(self.file_drop_panel, 0)
+        # Update HoverCam
+        if self.hovercam and self.hovercam.isOpened():
+            ret, frame = self.hovercam.read()
+            if ret:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self._display_frame(frame_rgb, self.hover_label)
     
-    def _start_pepper_camera(self):
-        """Start Pepper camera feed."""
-        if not self.pepper_feed:
-            self.status_update_signal.emit("Pepper camera: Not available")
+    def _display_frame(self, frame, label):
+        """Display a frame in a QLabel."""
+        try:
+            height, width, channel = frame.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            
+            # Scale to fit label while maintaining aspect ratio
+            pixmap = QPixmap.fromImage(q_image)
+            scaled_pixmap = pixmap.scaled(
+                label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            label.setPixmap(scaled_pixmap)
+        except Exception as e:
+            print(f"Error displaying frame: {e}")
+    
+    def _switch_camera_source(self):
+        """Switch which camera feed goes to tablet."""
+        # Toggle between Pepper's camera and HoverCam on tablet
+        if not hasattr(self, 'showing_hover_on_tablet'):
+            self.showing_hover_on_tablet = False
+        
+        self.showing_hover_on_tablet = not self.showing_hover_on_tablet
+        
+        try:
+            if self.showing_hover_on_tablet:
+                # Show HoverCam on tablet (via tablet controller)
+                self.tablet.current_mode = self.tablet.current_mode  # Keep current mode
+                self.tablet.refresh_display()
+                
+                self.switch_button.setText("📷 Show Pepper Cam")
+                self.status_label.setText("Status: Tablet showing HoverCam (feature in development)")
+                logger.info("Switched tablet to HoverCam view")
+            else:
+                # Show Pepper's camera on tablet
+                self.tablet.refresh_display()
+                
+                self.switch_button.setText("📷 Switch to Tablet")
+                self.status_label.setText("Status: Tablet showing Pepper's camera")
+                logger.info("Switched tablet to Pepper's camera")
+        except Exception as e:
+            logger.error(f"Camera switch error: {e}")
+            self.status_label.setText(f"✗ Switch failed: {e}")
+    
+    def _take_snapshot(self):
+        """Save current frame as image."""
+        try:
+            from PIL import Image
+        except ImportError:
+            self.status_label.setText("✗ PIL not installed (pip install Pillow)")
+            logger.error("Pillow not installed")
             return
         
-        success = self.pepper_feed.start(self._on_pepper_frame)
-        if success:
-            self.pepper_start_btn.setEnabled(False)
-            self.pepper_stop_btn.setEnabled(True)
-            self.status_update_signal.emit("Pepper camera: Started")
-        else:
-            self.status_update_signal.emit("Pepper camera: Failed to start")
-    
-    def _stop_pepper_camera(self):
-        """Stop Pepper camera feed."""
-        if self.pepper_feed:
-            self.pepper_feed.stop()
-            self.pepper_display.clear_frame()
-            self.pepper_start_btn.setEnabled(True)
-            self.pepper_stop_btn.setEnabled(False)
-            self.status_update_signal.emit("Pepper camera: Stopped")
-    
-    def _start_external_camera(self):
-        """Start external camera feed."""
-        if not self.external_feed:
-            self.status_update_signal.emit("External camera: Not available")
-            return
+        # Create snapshots directory
+        snapshot_dir = os.path.expanduser("~/pepper_snapshots")
+        os.makedirs(snapshot_dir, exist_ok=True)
         
-        camera_id = self.camera_selector.currentIndex()
-        self.external_feed.camera_id = camera_id
+        # Get current frame from Pepper's camera
+        if self.pepper_video and self.pepper_subscriber_id:
+            try:
+                img_data = self.pepper_video.getImageRemote(self.pepper_subscriber_id)
+                if img_data:
+                    width, height, image_bytes = img_data[0], img_data[1], img_data[6]
+                    frame = np.frombuffer(image_bytes, dtype=np.uint8).reshape((height, width, 3))
+                    
+                    # Generate filename with timestamp
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"pepper_snapshot_{timestamp}.png"
+                    filepath = os.path.join(snapshot_dir, filename)
+                    
+                    # Save using PIL
+                    img = Image.fromarray(frame)
+                    img.save(filepath)
+                    
+                    self.status_label.setText(f"✓ Saved: {filename}")
+                    self.status_label.setStyleSheet("color: #4ade80; font-size: 11px;")
+                    logger.info(f"Snapshot saved: {filepath}")
+                    
+                    # Show notification
+                    QMessageBox.information(
+                        self,
+                        "Snapshot Saved",
+                        f"Image saved to:\n{filepath}"
+                    )
+                    return
+            except Exception as e:
+                logger.error(f"Snapshot error: {e}")
         
-        success = self.external_feed.start(self._on_external_frame)
-        if success:
-            self.external_start_btn.setEnabled(False)
-            self.external_stop_btn.setEnabled(True)
-            self.camera_selector.setEnabled(False)
-            self.status_update_signal.emit(f"External camera {camera_id}: Started")
-        else:
-            self.status_update_signal.emit(f"External camera {camera_id}: Failed to start")
-    
-    def _stop_external_camera(self):
-        """Stop external camera feed."""
-        if self.external_feed:
-            self.external_feed.stop()
-            self.external_display.clear_frame()
-            self.external_start_btn.setEnabled(True)
-            self.external_stop_btn.setEnabled(False)
-            self.camera_selector.setEnabled(True)
-            self.status_update_signal.emit("External camera: Stopped")
-    
-    def _on_pepper_frame(self, frame):
-        """Handle new Pepper camera frame."""
-        self.pepper_display.update_frame(frame)
-    
-    def _on_external_frame(self, frame):
-        """Handle new external camera frame."""
-        self.external_display.update_frame(frame)
+        self.status_label.setText("✗ Snapshot failed")
+        self.status_label.setStyleSheet("color: #f87171; font-size: 11px;")
     
     def _on_file_displayed(self, file_path, success):
-        """Handle file drop result."""
+        """Handle file display result."""
         if success:
-            self.status_update_signal.emit(f"File displayed: {file_path}")
+            self.status_label.setText(f"✓ File displayed on tablet")
         else:
-            self.status_update_signal.emit(f"Failed to display: {file_path}")
+            self.status_label.setText(f"✗ Failed to display file")
     
     def cleanup(self):
-        """Cleanup resources."""
-        if CV2_AVAILABLE:
-            self._stop_pepper_camera()
-            self._stop_external_camera()
+        """Cleanup camera resources."""
+        self.timer.stop()
+        
+        if self.pepper_subscriber_id and self.pepper_video:
+            try:
+                self.pepper_video.unsubscribe(self.pepper_subscriber_id)
+            except:
+                pass
+        
+        if self.hovercam:
+            self.hovercam.release()

@@ -1,0 +1,43 @@
+# =================================================================
+# GUI Dependencies for Pepper Control Center
+# Install with: pip install -r requirements_gui.txt
+# =================================================================
+
+# Core robot communication (from main requirements.txt)
+qi==3.1.5
+websockets==13.0
+Flask==3.1.2
+Flask-Cors==6.0.1
+numpy==1.26.4
+opencv-python==4.12.0.88
+pynput==1.7.6
+
+# GUI Framework
+PyQt5==5.15.10
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+
+# Audio Streaming
+pyaudio==0.2.14
+
+# Voice Recognition
+SpeechRecognition==3.10.0
+# For better offline recognition (optional):
+# pocketsphinx==5.0.0
+
+# Image/Video handling
+Pillow==10.1.0
+
+# =================================================================
+# LINUX INSTALLATION NOTES:
+# =================================================================
+# If PyAudio fails, install system dependencies first:
+#   Ubuntu/Debian:
+#     sudo apt-get install portaudio19-dev python3-pyaudio
+#   Fedora:
+#     sudo dnf install portaudio-devel
+#   Arch:
+#     sudo pacman -S portaudio
+#
+# Then: pip install pyaudio
+# =================================================================

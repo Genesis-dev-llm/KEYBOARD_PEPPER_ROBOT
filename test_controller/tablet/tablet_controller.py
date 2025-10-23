@@ -1,37 +1,19 @@
 """
-Tablet Controller with Safe Fallbacks
+Tablet Controller
 Main logic for controlling Pepper's chest tablet display.
-FIXED: Graceful degradation if tablet service unavailable
 """
 
 import logging
 import os
 import random
+from .display_modes import DisplayMode
+from .html_templates import (
+    get_status_display_html,
+    get_camera_mirror_html,
+    get_greeting_html
+)
 
 logger = logging.getLogger(__name__)
-
-# Try to import display modules (may not be available)
-try:
-    from .display_modes import DisplayMode
-    from .html_templates import (
-        get_status_display_html,
-        get_camera_mirror_html,
-        get_greeting_html
-    )
-    DISPLAY_MODULES_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Tablet display modules not fully available: {e}")
-    DISPLAY_MODULES_AVAILABLE = False
-    
-    # Create minimal fallback
-    class DisplayMode:
-        STATUS = "status"
-        CAMERA = "camera"
-        GREETING = "greeting"
-        
-        def next(self):
-            return self
-
 
 class TabletController:
     """Controls Pepper's tablet display with multiple modes."""
@@ -51,9 +33,6 @@ class TabletController:
         # Greeting images
         self.greeting_images = self._load_greeting_images()
         
-        # Track if tablet is actually available
-        self.tablet_available = False
-        
         # Initialize tablet service
         self._initialize()
     
@@ -62,16 +41,13 @@ class TabletController:
         try:
             self.tablet = self.session.service("ALTabletService")
             self.battery_service = self.session.service("ALBattery")
-            self.tablet_available = True
             logger.info("✓ Tablet controller initialized")
             
             # Show initial display
             self.refresh_display()
-            
         except Exception as e:
-            logger.warning(f"Tablet service not available: {e}")
-            logger.warning("Tablet display will be disabled (not an error)")
-            self.tablet_available = False
+            logger.error(f"Failed to initialize tablet: {e}")
+            logger.warning("Tablet display will be disabled")
     
     def _load_greeting_images(self):
         """Load greeting images from assets folder (if available)."""
@@ -85,6 +61,10 @@ class TabletController:
             
             if greeting_images:
                 logger.info(f"✓ Loaded {len(greeting_images)} greeting image(s)")
+            else:
+                logger.info("No greeting images found (will use text fallback)")
+        else:
+            logger.info("No greeting images folder (will use text fallback)")
         
         return greeting_images
     
@@ -94,7 +74,7 @@ class TabletController:
             if self.battery_service:
                 return self.battery_service.getBatteryCharge()
         except Exception as e:
-            logger.debug(f"Could not get battery level: {e}")
+            logger.warning(f"Could not get battery level: {e}")
         return 50  # Default fallback
     
     def set_action(self, action, detail=""):
@@ -102,40 +82,32 @@ class TabletController:
         self.current_action = action
         self.action_detail = detail
         
-        # Only refresh if in STATUS mode and tablet available
-        if self.tablet_available and self.current_mode == DisplayMode.STATUS:
+        # Only refresh if in STATUS mode
+        if self.current_mode == DisplayMode.STATUS:
             self.refresh_display()
     
     def set_movement_mode(self, continuous):
         """Update movement mode (continuous/incremental)."""
         self.continuous_mode = continuous
         
-        # Only refresh if in STATUS mode and tablet available
-        if self.tablet_available and self.current_mode == DisplayMode.STATUS:
+        # Only refresh if in STATUS mode
+        if self.current_mode == DisplayMode.STATUS:
             self.refresh_display()
     
     def cycle_mode(self):
         """Cycle to the next display mode."""
-        if not self.tablet_available:
-            logger.debug("Tablet not available, ignoring mode cycle")
-            return
-        
         self.current_mode = self.current_mode.next()
         logger.info(f"Tablet mode changed to: {self.current_mode}")
         self.refresh_display()
     
     def show_greeting(self):
         """Show greeting display (with image if available)."""
-        if not self.tablet_available:
-            logger.debug("Tablet not available, ignoring greeting request")
-            return
-        
         self.current_mode = DisplayMode.GREETING
         self.refresh_display()
     
     def refresh_display(self):
         """Refresh the tablet display based on current mode."""
-        if not self.tablet_available or not DISPLAY_MODULES_AVAILABLE:
+        if not self.tablet:
             return
         
         try:
@@ -150,9 +122,6 @@ class TabletController:
     
     def _show_status_display(self):
         """Show status + action display."""
-        if not DISPLAY_MODULES_AVAILABLE:
-            return
-        
         battery = self._get_battery_level()
         
         html = get_status_display_html(
@@ -166,9 +135,6 @@ class TabletController:
     
     def _show_camera_display(self):
         """Show camera mirror feed."""
-        if not DISPLAY_MODULES_AVAILABLE:
-            return
-        
         # Camera feed URL (from video server)
         camera_url = f"http://{self.robot_ip}:8080/video_feed"
         
@@ -181,14 +147,13 @@ class TabletController:
     
     def _show_greeting_display(self):
         """Show greeting (with random image if available)."""
-        if not DISPLAY_MODULES_AVAILABLE:
-            return
-        
         greeting_image_url = None
         
         # Pick random greeting image if available
         if self.greeting_images:
-            logger.debug("Greeting images available but serving not implemented")
+            # For local files, we need to serve them via HTTP
+            # For now, use None and show text (you can add HTTP server later)
+            logger.info("Showing greeting with text (image serving not yet implemented)")
         
         html = get_greeting_html(
             greeting_image_url=greeting_image_url,
@@ -199,7 +164,7 @@ class TabletController:
     
     def reset(self):
         """Reset tablet to default state."""
-        if self.tablet_available and self.tablet:
+        if self.tablet:
             try:
                 self.tablet.resetTablet()
                 logger.info("Tablet reset")
@@ -208,48 +173,4 @@ class TabletController:
     
     def get_current_mode(self):
         """Get the current display mode."""
-        if self.tablet_available:
-            return str(self.current_mode)
-        else:
-            return "DISABLED"
-
-
-class DummyTabletController:
-    """Dummy tablet controller for when tablet service is unavailable."""
-    
-    def __init__(self, session=None, robot_ip=None):
-        logger.info("Using dummy tablet controller (tablet service unavailable)")
-        self.tablet_available = False
-    
-    def set_action(self, action, detail=""): 
-        pass
-    
-    def set_movement_mode(self, mode): 
-        pass
-    
-    def cycle_mode(self): 
-        logger.debug("Tablet not available")
-    
-    def show_greeting(self): 
-        logger.debug("Tablet not available")
-    
-    def get_current_mode(self): 
-        return "DISABLED"
-    
-    def refresh_display(self): 
-        pass
-    
-    def reset(self): 
-        pass
-
-
-def create_tablet_controller(session, robot_ip):
-    """
-    Factory function to create appropriate tablet controller.
-    Returns DummyTabletController if real one fails.
-    """
-    try:
-        return TabletController(session, robot_ip)
-    except Exception as e:
-        logger.warning(f"Could not create tablet controller: {e}")
-        return DummyTabletController()
+        return self.current_mode

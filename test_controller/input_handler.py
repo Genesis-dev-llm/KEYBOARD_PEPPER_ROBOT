@@ -129,16 +129,22 @@ class InputHandler:
                 # ============================================================
                 elif key.char == 'u':
                     self.body.move_shoulder_pitch('L', 'up')
+                    self.tablet.set_action("Moving Arms", "Left shoulder up")
                 elif key.char == 'j':
                     self.body.move_shoulder_pitch('L', 'down')
+                    self.tablet.set_action("Moving Arms", "Left shoulder down")
                 elif key.char == 'i':
                     self.body.move_shoulder_pitch('R', 'up')
+                    self.tablet.set_action("Moving Arms", "Right shoulder up")
                 elif key.char == 'k':
                     self.body.move_shoulder_pitch('R', 'down')
+                    self.tablet.set_action("Moving Arms", "Right shoulder down")
                 elif key.char == 'o':
                     self.body.move_shoulder_roll('L', 'out')
+                    self.tablet.set_action("Moving Arms", "Left arm out")
                 elif key.char == 'l':
                     self.body.move_shoulder_roll('R', 'out')
+                    self.tablet.set_action("Moving Arms", "Right arm out")
                 
                 # ============================================================
                 # ELBOW CONTROLS
@@ -197,20 +203,28 @@ class InputHandler:
                 # ============================================================
                 elif key.char == '1':
                     logger.info("🎭 Triggering: Wave")
+                    self.tablet.set_action("Wave", "Starting wave animation...")
                     self.pepper.tts.say("Hello!")
                     self.dances['wave'].perform()
+                    self.tablet.set_action("Ready", "Wave complete")
                 elif key.char == '2':
                     logger.info("💃 Triggering: SPECIAL DANCE")
+                    self.tablet.set_action("Special Dance", "Let's dance!")
                     self.pepper.tts.say("Let's dance!")
                     self.dances['special'].perform()
+                    self.tablet.set_action("Ready", "Special dance complete")
                 elif key.char == '3':
                     logger.info("🤖 Triggering: Robot Dance")
+                    self.tablet.set_action("Robot Dance", "Beep boop!")
                     self.pepper.tts.say("Beep boop!")
                     self.dances['robot'].perform()
+                    self.tablet.set_action("Ready", "Robot dance complete")
                 elif key.char == '4':
                     logger.info("🌙 Triggering: MOONWALK")
+                    self.tablet.set_action("Moonwalk", "Shamone!")
                     self.pepper.tts.say("Shamone!")
                     self.dances['moonwalk'].perform()
+                    self.tablet.set_action("Ready", "Moonwalk complete")
                 
                 # ============================================================
                 # SYSTEM COMMANDS
@@ -225,6 +239,7 @@ class InputHandler:
             # ============================================================
             elif key == Key.space:
                 self.base.stop()
+                self.tablet.set_action("Stopped", "All movement halted")
                 logger.info("⏸️  All movement stopped")
             
             # ============================================================
@@ -232,6 +247,7 @@ class InputHandler:
             # ============================================================
             elif key == Key.esc:
                 logger.info("ESC pressed - shutting down...")
+                self.tablet.set_action("Emergency Stop", "Shutting down...")
                 self.running = False
                 self.base.stop()
                 self.video.stop()
@@ -248,11 +264,14 @@ class InputHandler:
             if self.continuous_mode:
                 if key == Key.up or key == Key.down:
                     self.base.set_continuous_velocity('x', 0.0)
+                    self.tablet.set_action("Ready", "Waiting for input...")
                 elif key == Key.left or key == Key.right:
                     self.base.set_continuous_velocity('y', 0.0)
+                    self.tablet.set_action("Ready", "Waiting for input...")
                 elif hasattr(key, 'char'):
                     if key.char in ['q', 'e']:
                         self.base.set_continuous_velocity('theta', 0.0)
+                        self.tablet.set_action("Ready", "Waiting for input...")
         except:
             pass
     
@@ -270,6 +289,7 @@ class InputHandler:
             print(f"Body Speed: {self.body.body_speed:.2f}")
             print(f"Movement Mode: {'CONTINUOUS' if self.continuous_mode else 'INCREMENTAL'}")
             print(f"Video Active: {'YES' if self.video.is_active() else 'NO'}")
+            print(f"Tablet Mode: {self.tablet.get_current_mode()}")
             print("="*60 + "\n")
         except Exception as e:
             logger.error(f"Could not retrieve status: {e}")
@@ -288,7 +308,8 @@ class InputHandler:
         print("  🎮 PEPPER KEYBOARD CONTROLS")
         print("="*60)
         print(f"  Movement Mode: {mode_str}")
-        print("  T: Toggle mode | V: Video | P: Status | ESC: Quit")
+        print("  T: Toggle mode | V: Video | M: Tablet mode | H: Greeting")
+        print("  P: Status | ESC: Quit")
         print()
         print("  MOVEMENT:")
         print("    Arrow Keys: Move | Q/E: Rotate | Z: Reset position")
@@ -308,6 +329,10 @@ class InputHandler:
         print("  HANDS (use Shift):")
         print("    </> (Shift+,/.): Left hand")
         print("    (/) (Shift+9/0): Right hand")
+        print()
+        print("  TABLET:")
+        print("    M: Cycle display mode (Status/Camera/Greeting)")
+        print("    H: Show greeting")
         print()
         print("  DANCES:")
         print("    1: Wave | 2: Special Dance 💃 | 3: Robot 🤖 | 4: Moonwalk 🌙")
