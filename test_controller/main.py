@@ -1,9 +1,6 @@
 """
-Main Entry Point for Pepper Keyboard Test Controller
+Main Entry Point for Pepper Keyboard Test Controller - FULLY FIXED
 Orchestrates all components and starts the controller.
-
-Updated: Phase 2 - Added GUI support with PyQt5
-FIXED: Better error handling, optional video/tablet, proper cleanup
 """
 
 import sys
@@ -16,22 +13,9 @@ import time
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(levelname)s: %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Import controllers
-from .controllers import PepperConnection, BaseController, BodyController, VideoController
-from .dances import WaveDance, SpecialDance, RobotDance, MoonwalkDance
-from .input_handler import InputHandler
-
-# Try to import tablet controller (optional)
-try:
-    from .tablet import TabletController
-    TABLET_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Tablet controller not available: {e}")
-    TABLET_AVAILABLE = False
 
 def run():
     """Main entry point for the test controller."""
@@ -125,56 +109,52 @@ Examples:
     try:
         print("\n" + "="*60)
         print("  🤖 PEPPER KEYBOARD TEST CONTROLLER")
-        print("  Version 2.0.0 - Modular Edition")
+        print("  Version 2.0.1 - FIXED EDITION")
         print("="*60 + "\n")
         
+        # Import controllers
+        from .controllers import PepperConnection, BaseController, BodyController, VideoController
+        from .dances import WaveDance, SpecialDance, RobotDance, MoonwalkDance
+        from .input_handler import InputHandler
+        
         # Connect to Pepper
-        logger.info("Initializing Pepper connection...")
+        logger.info("Connecting to Pepper...")
         try:
             pepper_conn = PepperConnection(pepper_ip)
+            logger.info(f"✓ Connected to Pepper at {pepper_ip}")
         except Exception as e:
             logger.error(f"Failed to connect to Pepper: {e}")
             raise ConnectionError(f"Could not connect to Pepper at {pepper_ip}")
         
         # Initialize movement controllers
         logger.info("Initializing movement controllers...")
-        try:
-            base_ctrl = BaseController(pepper_conn.motion)
-            body_ctrl = BodyController(pepper_conn.motion)
-        except Exception as e:
-            logger.error(f"Failed to initialize controllers: {e}")
-            raise
+        base_ctrl = BaseController(pepper_conn.motion)
+        body_ctrl = BodyController(pepper_conn.motion)
+        logger.info("✓ Movement controllers initialized")
         
         # Initialize video controller (optional)
+        video_ctrl = None
         if not args.no_video:
             logger.info("Initializing video controller...")
             try:
                 video_ctrl = VideoController(pepper_ip)
                 logger.info("✓ Video controller ready (press V to toggle)")
             except Exception as e:
-                logger.warning(f"Video controller initialization failed: {e}")
-                logger.warning("Video feed will not be available")
+                logger.warning(f"Video controller failed: {e}")
                 video_ctrl = None
-        else:
-            logger.info("Video controller disabled (--no-video)")
-            video_ctrl = None
         
         # Initialize tablet display (optional)
-        if not args.no_tablet and TABLET_AVAILABLE:
-            logger.info("Initializing tablet display...")
+        tablet_ctrl = None
+        if not args.no_tablet:
             try:
+                from .tablet import TabletController
+                logger.info("Initializing tablet display...")
                 tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
                 logger.info("✓ Tablet display ready")
+            except ImportError:
+                logger.warning("Tablet module not available")
             except Exception as e:
                 logger.warning(f"Tablet initialization failed: {e}")
-                logger.warning("Tablet display will not be available")
-                tablet_ctrl = None
-        else:
-            if args.no_tablet:
-                logger.info("Tablet display disabled (--no-tablet)")
-            else:
-                logger.warning("Tablet module not available")
-            tablet_ctrl = None
         
         # Create dummy tablet controller if needed
         if tablet_ctrl is None:
@@ -187,21 +167,16 @@ Examples:
                 def refresh_display(self): pass
             
             tablet_ctrl = DummyTablet()
-            logger.info("Using dummy tablet controller")
         
         # Initialize dances
         logger.info("Loading dance animations...")
-        try:
-            dances = {
-                'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
-                'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
-                'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
-                'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
-            }
-            logger.info(f"✓ Loaded {len(dances)} dance animations")
-        except Exception as e:
-            logger.error(f"Failed to load dances: {e}")
-            raise
+        dances = {
+            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
+            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
+            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
+            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
+        }
+        logger.info(f"✓ Loaded {len(dances)} dance animations")
         
         # Check if GUI mode requested
         if args.gui:
@@ -219,7 +194,6 @@ Examples:
                 'body': body_ctrl
             }
             
-            # Add video only if initialized
             if video_ctrl:
                 controllers_dict['video'] = video_ctrl
             
@@ -229,6 +203,15 @@ Examples:
         # ====================================================================
         # KEYBOARD MODE (non-GUI)
         # ====================================================================
+        
+        # Create dummy video controller if not initialized
+        if video_ctrl is None:
+            class DummyVideo:
+                def start(self): 
+                    logger.warning("Video not available")
+                def stop(self): pass
+                def is_active(self): return False
+            video_ctrl = DummyVideo()
         
         # Start base movement update thread (for continuous mode)
         def base_update_loop():
@@ -243,14 +226,10 @@ Examples:
         
         # Initialize input handler
         logger.info("Initializing keyboard input handler...")
-        try:
-            input_handler = InputHandler(
-                pepper_conn, base_ctrl, body_ctrl, 
-                video_ctrl, tablet_ctrl, dances
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize input handler: {e}")
-            raise
+        input_handler = InputHandler(
+            pepper_conn, base_ctrl, body_ctrl, 
+            video_ctrl, tablet_ctrl, dances
+        )
         
         # Start base update thread
         base_thread = threading.Thread(target=base_update_loop, daemon=True)
@@ -283,30 +262,30 @@ Examples:
         if input_handler:
             input_handler.running = False
         
-        # Wait for base thread to finish
+        # Wait for base thread
         if base_thread and base_thread.is_alive():
             base_thread.join(timeout=1.0)
         
         # Stop video
-        if video_ctrl:
+        if video_ctrl and hasattr(video_ctrl, 'stop'):
             try:
                 video_ctrl.stop()
-            except Exception as e:
-                logger.debug(f"Error stopping video: {e}")
+            except:
+                pass
         
         # Stop base movement
         if base_ctrl:
             try:
                 base_ctrl.stop()
-            except Exception as e:
-                logger.debug(f"Error stopping base: {e}")
+            except:
+                pass
         
-        # Close Pepper connection
+        # Close connection
         if pepper_conn:
             try:
                 pepper_conn.close()
-            except Exception as e:
-                logger.debug(f"Error closing connection: {e}")
+            except:
+                pass
         
         logger.info("Goodbye!")
 
