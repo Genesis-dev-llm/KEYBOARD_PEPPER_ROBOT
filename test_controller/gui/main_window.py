@@ -1,6 +1,8 @@
 """
 Main Window for Pepper Control Center
 Professional PyQt5 GUI with resizable/movable window.
+
+COMPLETE PHASE 4B VERSION
 """
 
 import sys
@@ -37,6 +39,12 @@ class PepperControlGUI(QMainWindow):
         
         # Configuration file path
         self.config_file = os.path.expanduser('~/.pepper_gui_config.json')
+        
+        # Battery warning state (Phase 4B)
+        self._battery_warning_shown = False
+        self._battery_critical_shown = False
+        self._low_battery_threshold = 30  # %
+        self._critical_battery_threshold = 15  # %
         
         # Initialize UI
         self._init_ui()
@@ -113,8 +121,18 @@ class PepperControlGUI(QMainWindow):
         # File menu
         file_menu = menubar.addMenu('&File')
         
+        # Settings action (NEW - Phase 4B)
+        settings_action = file_menu.addAction('⚙️ Settings')
+        settings_action.setShortcut('Ctrl+,')
+        settings_action.setToolTip("Configure application settings")
+        settings_action.triggered.connect(self._show_settings)
+        
+        file_menu.addSeparator()
+        
         # Robot Status action
         status_action = file_menu.addAction('🤖 Robot Status')
+        status_action.setShortcut('Ctrl+I')
+        status_action.setToolTip("Show detailed robot status")
         status_action.triggered.connect(self._show_robot_status_dialog)
         
         file_menu.addSeparator()
@@ -122,6 +140,7 @@ class PepperControlGUI(QMainWindow):
         # Quit action
         quit_action = file_menu.addAction('Quit')
         quit_action.setShortcut('Ctrl+Q')
+        quit_action.setToolTip("Exit application")
         quit_action.triggered.connect(self.close)
         
         # Help menu
@@ -130,41 +149,199 @@ class PepperControlGUI(QMainWindow):
         # Keyboard shortcuts
         shortcuts_action = help_menu.addAction('⌨️ Keyboard Shortcuts')
         shortcuts_action.setShortcut('F1')
+        shortcuts_action.setToolTip("Show all keyboard shortcuts")
         shortcuts_action.triggered.connect(self._show_shortcuts_help)
+        
+        help_menu.addSeparator()
         
         # About
         about_action = help_menu.addAction('About')
+        about_action.setToolTip("About Pepper Control Center")
         about_action.triggered.connect(self._show_about)
     
+    def _show_settings(self):
+        """Show settings dialog (Phase 4B)."""
+        try:
+            from .settings_dialog import SettingsDialog
+            dialog = SettingsDialog(self)
+            if dialog.exec_():
+                # Settings were saved
+                logger.info("Settings saved successfully")
+                # Could reload settings here if needed
+        except ImportError as e:
+            logger.error(f"Settings dialog not found: {e}")
+            QMessageBox.warning(
+                self, 
+                "Feature Not Available", 
+                "Settings dialog is not available.\n\n"
+                "This may be a missing file issue."
+            )
+        except Exception as e:
+            logger.error(f"Settings dialog error: {e}")
+            QMessageBox.warning(self, "Error", f"Could not open settings:\n{e}")
+    
     def _show_robot_status_dialog(self):
-        """Show robot status dialog (wrapper for control panel method)."""
-        if hasattr(self, 'control_panel'):
-            self.control_panel._show_robot_status()
-        else:
-            QMessageBox.warning(self, "Error", "Control panel not initialized")
+        """Show robot status dialog."""
+        try:
+            status = self.pepper.get_status()
+            
+            if status and status.get('connected'):
+                battery = status.get('battery', 'Unknown')
+                stiffness = status.get('stiffness', 'Unknown')
+                wheels_enabled = status.get('wheels_enabled', 'Unknown')
+                
+                message = f"""
+<h3>Robot Status</h3>
+<table cellpadding="5">
+<tr><td><b>Connection:</b></td><td style="color: #4ade80;">✓ Connected</td></tr>
+<tr><td><b>Battery:</b></td><td>{battery}%</td></tr>
+<tr><td><b>Body Stiffness:</b></td><td>{stiffness}</td></tr>
+<tr><td><b>Wheels Enabled:</b></td><td>{wheels_enabled}</td></tr>
+</table>
+
+<p style="margin-top: 10px;"><i>Tip: Battery below 30% may affect performance</i></p>
+                """
+            else:
+                message = """
+<h3>Robot Status</h3>
+<p style="color: #f87171;">✗ Not Connected</p>
+<p>Could not retrieve robot status.<br>
+Please check:</p>
+<ul>
+<li>Robot is powered on</li>
+<li>IP address is correct</li>
+<li>Network connection</li>
+</ul>
+                """
+            
+            QMessageBox.information(self, "Robot Status", message)
+            
+        except Exception as e:
+            logger.error(f"Status dialog error: {e}")
+            QMessageBox.warning(self, "Error", f"Could not get status:\n{e}")
     
     def _show_about(self):
         """Show about dialog."""
         about_text = """
-<h2>Pepper Control Center</h2>
-<p><b>Version 2.0.0</b> - PyQt5 GUI Edition</p>
+<h2>🤖 Pepper Control Center</h2>
+<p><b>Version 2.0.0</b> - Complete Edition</p>
 
 <p>Professional control interface for SoftBank Robotics Pepper robot</p>
 
-<h3>Features:</h3>
+<h3>✨ Features:</h3>
 <ul>
-<li>Real-time robot control</li>
-<li>Dual camera feeds (Pepper + External)</li>
-<li>Live audio streaming</li>
-<li>Dance animations</li>
-<li>Tablet display management</li>
-<li>Drag & drop file display</li>
+<li><b>Phase 1:</b> Smooth keyboard control with turbo mode</li>
+<li><b>Phase 2:</b> 4-mode tablet display system</li>
+<li><b>Phase 3:</b> Perfect, safe dance animations</li>
+<li><b>Phase 4:</b> Professional GUI interface</li>
 </ul>
 
+<h3>🎮 Quick Start:</h3>
+<p>• Use arrow keys or GUI buttons to move<br>
+• Press 1-4 for dances<br>
+• Press X for turbo mode<br>
+• Press F1 for full keyboard shortcuts</p>
+
+<h3>📚 Components:</h3>
+<p>• Movement Control (Base + Body)<br>
+• Dance System (4 animations)<br>
+• Tablet Display (4 modes)<br>
+• Video Streaming Server<br>
+• Settings Management</p>
+
 <p><i>Built for VR Teleoperation Research</i></p>
-<p>© 2025 Pepper VR Team</p>
+<p><b>© 2025 Pepper VR Team</b></p>
+
+<p style="font-size: 10px; color: #8e8e8e; margin-top: 20px;">
+Phases 1-4 Complete | All Systems Operational</p>
         """
         QMessageBox.about(self, "About Pepper Control Center", about_text)
+    
+    def _show_shortcuts_help(self):
+        """Show keyboard shortcuts help dialog."""
+        help_text = """
+<h2>⌨️ Keyboard Shortcuts</h2>
+
+<h3>Window Controls:</h3>
+<table cellpadding="5">
+<tr><td><b>F1</b></td><td>Show this help</td></tr>
+<tr><td><b>F11</b></td><td>Toggle fullscreen</td></tr>
+<tr><td><b>Ctrl+Q</b></td><td>Quit application</td></tr>
+<tr><td><b>Ctrl+,</b></td><td>Open Settings</td></tr>
+<tr><td><b>Ctrl+I</b></td><td>Robot Status</td></tr>
+<tr><td><b>ESC</b></td><td>Emergency stop (or exit fullscreen)</td></tr>
+</table>
+
+<h3>Movement:</h3>
+<table cellpadding="5">
+<tr><td><b>↑ ↓ ← →</b></td><td>Move robot</td></tr>
+<tr><td><b>Q / E</b></td><td>Rotate left / right</td></tr>
+<tr><td><b>SPACE</b></td><td>Stop all movement</td></tr>
+<tr><td><b>T</b></td><td>Toggle Continuous/Incremental mode</td></tr>
+<tr><td><b>Z</b></td><td>Reset position (Incremental mode)</td></tr>
+</table>
+
+<h3>Speed Control:</h3>
+<table cellpadding="5">
+<tr><td><b>+ / =</b></td><td>Increase base speed</td></tr>
+<tr><td><b>- / _</b></td><td>Decrease base speed</td></tr>
+<tr><td><b>[ / ]</b></td><td>Adjust body speed</td></tr>
+<tr><td><b>X</b></td><td>Toggle Turbo mode (1.5x speed)</td></tr>
+</table>
+
+<h3>Head Control:</h3>
+<table cellpadding="5">
+<tr><td><b>W / S</b></td><td>Head pitch (up/down)</td></tr>
+<tr><td><b>A / D</b></td><td>Head yaw (left/right)</td></tr>
+<tr><td><b>R</b></td><td>Reset head to center</td></tr>
+</table>
+
+<h3>Arms:</h3>
+<table cellpadding="5">
+<tr><td><b>U / J</b></td><td>Left shoulder up/down</td></tr>
+<tr><td><b>I / K</b></td><td>Right shoulder up/down</td></tr>
+<tr><td><b>O</b></td><td>Left arm out</td></tr>
+<tr><td><b>L</b></td><td>Right arm out</td></tr>
+<tr><td><b>7 / 9</b></td><td>Left elbow bend/straighten</td></tr>
+<tr><td><b>8 / 0</b></td><td>Right elbow bend/straighten</td></tr>
+</table>
+
+<h3>Wrists & Hands:</h3>
+<table cellpadding="5">
+<tr><td><b>, / .</b></td><td>Left wrist rotate</td></tr>
+<tr><td><b>; / '</b></td><td>Right wrist rotate</td></tr>
+<tr><td><b>Shift+, / Shift+.</b></td><td>Left hand open/close</td></tr>
+<tr><td><b>Shift+9 / Shift+0</b></td><td>Right hand open/close</td></tr>
+</table>
+
+<h3>Dances:</h3>
+<table cellpadding="5">
+<tr><td><b>1</b></td><td>Wave dance 👋</td></tr>
+<tr><td><b>2</b></td><td>Special dance 💃</td></tr>
+<tr><td><b>3</b></td><td>Robot dance 🤖</td></tr>
+<tr><td><b>4</b></td><td>Moonwalk dance 🌙</td></tr>
+</table>
+
+<h3>Tablet Display:</h3>
+<table cellpadding="5">
+<tr><td><b>M</b></td><td>Cycle display modes</td></tr>
+<tr><td><b>H</b></td><td>Show greeting</td></tr>
+<tr><td><b>V</b></td><td>Toggle video (keyboard mode)</td></tr>
+</table>
+
+<h3>System:</h3>
+<table cellpadding="5">
+<tr><td><b>P</b></td><td>Print status to console</td></tr>
+</table>
+
+<p style="color: #4ade80; margin-top: 15px;"><i>💡 Tip: All keyboard shortcuts work even with GUI open!</i></p>
+        """
+        
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            help_text
+        )
     
     def _setup_status_bar(self):
         """Setup the status bar at the bottom."""
@@ -208,7 +385,7 @@ class PepperControlGUI(QMainWindow):
         self.control_panel.status_update_signal.connect(self._handle_status_update)
     
     def _update_status(self):
-        """Update status bar information."""
+        """Update status bar information with battery warnings (Phase 4B)."""
         try:
             # Connection status
             status = self.pepper.get_status()
@@ -221,9 +398,11 @@ class PepperControlGUI(QMainWindow):
                 self.connection_label.setStyleSheet(self.connection_label.styleSheet() + 
                     "QLabel { color: #f87171; }")
             
-            # Battery level
+            # Battery level with warnings (Phase 4B)
             battery = status.get('battery', 0)
             self.battery_label.setText(f"🔋 {battery}%")
+            
+            # Color coding
             if battery >= 60:
                 color = "#4ade80"
             elif battery >= 30:
@@ -232,6 +411,32 @@ class PepperControlGUI(QMainWindow):
                 color = "#f87171"
             self.battery_label.setStyleSheet(self.battery_label.styleSheet() + 
                 f"QLabel {{ color: {color}; }}")
+            
+            # Battery warnings (Phase 4B)
+            if battery < self._critical_battery_threshold and not self._battery_critical_shown:
+                self._battery_critical_shown = True
+                QMessageBox.critical(
+                    self,
+                    "Critical Battery",
+                    f"Battery critically low: {battery}%!\n\n"
+                    "Please charge Pepper immediately.\n"
+                    "Robot may shut down soon."
+                )
+            elif battery < self._low_battery_threshold and not self._battery_warning_shown:
+                self._battery_warning_shown = True
+                QMessageBox.warning(
+                    self,
+                    "Low Battery",
+                    f"Battery low: {battery}%\n\n"
+                    "Please charge Pepper soon.\n"
+                    "Performance may be affected."
+                )
+            
+            # Reset warnings if battery goes back up
+            if battery >= self._low_battery_threshold:
+                self._battery_warning_shown = False
+            if battery >= self._critical_battery_threshold:
+                self._battery_critical_shown = False
             
             # Movement mode
             base = self.controllers.get('base')
@@ -250,7 +455,7 @@ class PepperControlGUI(QMainWindow):
             self.tablet_label.setText(f"Tablet: {tablet_mode}")
             
         except Exception as e:
-            print(f"Error updating status: {e}")
+            logger.error(f"Error updating status: {e}")
     
     def _update_movement(self):
         """Update continuous base movement (called at 20Hz)."""
@@ -279,7 +484,7 @@ class PepperControlGUI(QMainWindow):
                 QMessageBox.Ok
             )
         except Exception as e:
-            print(f"Error during emergency stop: {e}")
+            logger.error(f"Error during emergency stop: {e}")
     
     def _load_settings(self):
         """Load window settings from config file."""
@@ -298,9 +503,9 @@ class PepperControlGUI(QMainWindow):
                 if 'splitter' in settings:
                     self.main_splitter.setSizes(settings['splitter'])
                 
-                print("✓ Loaded GUI settings")
+                logger.info("✓ Loaded GUI settings")
         except Exception as e:
-            print(f"Could not load GUI settings: {e}")
+            logger.warning(f"Could not load GUI settings: {e}")
     
     def _save_settings(self):
         """Save window settings to config file."""
@@ -318,9 +523,9 @@ class PepperControlGUI(QMainWindow):
             with open(self.config_file, 'w') as f:
                 json.dump(settings, f, indent=2)
             
-            print("✓ Saved GUI settings")
+            logger.info("✓ Saved GUI settings")
         except Exception as e:
-            print(f"Could not save GUI settings: {e}")
+            logger.warning(f"Could not save GUI settings: {e}")
     
     def closeEvent(self, event):
         """Handle window close event."""
@@ -380,39 +585,6 @@ class PepperControlGUI(QMainWindow):
         
         else:
             super().keyPressEvent(event)
-    
-    def _show_shortcuts_help(self):
-        """Show keyboard shortcuts help dialog."""
-        help_text = """
-<h2>Keyboard Shortcuts</h2>
-
-<h3>Window Controls:</h3>
-<table>
-<tr><td><b>F1</b></td><td>Show this help</td></tr>
-<tr><td><b>F11</b></td><td>Toggle fullscreen</td></tr>
-<tr><td><b>Ctrl+Q</b></td><td>Quit application</td></tr>
-<tr><td><b>ESC</b></td><td>Emergency stop (or exit fullscreen)</td></tr>
-</table>
-
-<h3>Robot Controls:</h3>
-<p><i>All keyboard controls from the keyboard tester still work!</i></p>
-<table>
-<tr><td><b>Arrow Keys</b></td><td>Move robot</td></tr>
-<tr><td><b>Q/E</b></td><td>Rotate left/right</td></tr>
-<tr><td><b>1-4</b></td><td>Trigger dances</td></tr>
-<tr><td><b>M</b></td><td>Cycle tablet mode</td></tr>
-<tr><td><b>H</b></td><td>Show greeting</td></tr>
-<tr><td><b>SPACE</b></td><td>Stop movement</td></tr>
-</table>
-
-<p><i>Tip: You can use both GUI buttons and keyboard shortcuts!</i></p>
-        """
-        
-        QMessageBox.information(
-            self,
-            "Keyboard Shortcuts",
-            help_text
-        )
 
 
 def launch_gui(pepper_conn, controllers, dances, tablet_ctrl):
