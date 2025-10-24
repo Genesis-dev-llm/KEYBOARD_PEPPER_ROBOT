@@ -1,10 +1,13 @@
 """
-Professional HTML/CSS Templates for Pepper's Tablet
-High-quality, modern UI designs.
+Professional HTML/CSS Templates for Pepper's Tablet - Phase 2
+High-quality, modern UI designs with image support.
 """
 
-def get_status_display_html(action, action_detail, battery, mode):
-    """Generate HTML for status + action display."""
+def get_status_display_html(action, action_detail, battery, mode, image_url=None):
+    """
+    Generate HTML for status + action display.
+    Can show preset image or fallback to icon/text.
+    """
     
     # Battery color based on level
     if battery >= 60:
@@ -17,9 +20,10 @@ def get_status_display_html(action, action_detail, battery, mode):
     # Mode text
     mode_text = "CONTINUOUS" if mode else "INCREMENTAL"
     
-    # Action icon mapping
+    # Action icon mapping (fallback if no image)
     action_icons = {
         "Ready": "🤖",
+        "Standby": "😴",
         "Moving Forward": "⬆️",
         "Moving Backward": "⬇️",
         "Strafing Left": "⬅️",
@@ -28,7 +32,9 @@ def get_status_display_html(action, action_detail, battery, mode):
         "Rotating Right": "↷",
         "Wave": "👋",
         "Special Dance": "💃",
+        "Special": "💃",
         "Robot Dance": "🤖",
+        "Robot": "🤖",
         "Moonwalk": "🌙",
         "Looking Around": "👀",
         "Moving Arms": "💪",
@@ -38,6 +44,22 @@ def get_status_display_html(action, action_detail, battery, mode):
     }
     
     icon = action_icons.get(action, "🤖")
+    
+    # Content: image or icon/text
+    if image_url:
+        content = f'''
+        <div class="image-container">
+            <img src="{image_url}" alt="{action}" class="status-image">
+        </div>
+        <div class="action-text">{action.upper()}</div>
+        <div class="action-detail">{action_detail}</div>
+        '''
+    else:
+        content = f'''
+        <div class="action-icon">{icon}</div>
+        <div class="action-text">{action.upper()}</div>
+        <div class="action-detail">{action_detail}</div>
+        '''
     
     html = f"""
     <!DOCTYPE html>
@@ -88,6 +110,18 @@ def get_status_display_html(action, action_detail, battery, mode):
             @keyframes fadeIn {{
                 from {{ opacity: 0; transform: translateY(20px); }}
                 to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            
+            .image-container {{
+                margin-bottom: 20px;
+            }}
+            
+            .status-image {{
+                max-width: 400px;
+                max-height: 400px;
+                border-radius: 20px;
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+                animation: pulse 2s infinite;
             }}
             
             .action-icon {{
@@ -163,9 +197,7 @@ def get_status_display_html(action, action_detail, battery, mode):
         <div class="header">🤖 PEPPER</div>
         
         <div class="action-card">
-            <div class="action-icon">{icon}</div>
-            <div class="action-text">{action.upper()}</div>
-            <div class="action-detail">{action_detail}</div>
+            {content}
         </div>
         
         <div class="status-bar">
@@ -184,8 +216,74 @@ def get_status_display_html(action, action_detail, battery, mode):
     return html
 
 
-def get_camera_mirror_html(camera_url, action):
-    """Generate HTML for camera feed mirror."""
+def get_custom_image_html(image_url, caption=""):
+    """Generate HTML for custom static image display."""
+    
+    caption_html = f'<div class="caption">{caption}</div>' if caption else ''
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                background: #000;
+                color: white;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                overflow: hidden;
+            }}
+            
+            .image-container {{
+                max-width: 95%;
+                max-height: 90vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 20px;
+            }}
+            
+            .main-image {{
+                max-width: 100%;
+                max-height: 80vh;
+                object-fit: contain;
+                border-radius: 15px;
+                box-shadow: 0 8px 32px rgba(255, 255, 255, 0.1);
+            }}
+            
+            .caption {{
+                font-size: 28px;
+                font-weight: 600;
+                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="image-container">
+            <img src="{image_url}" alt="Custom Image" class="main-image">
+            {caption_html}
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def get_camera_feed_html(camera_url, camera_name="Camera"):
+    """Generate HTML for live camera feed display."""
     
     html = f"""
     <!DOCTYPE html>
@@ -238,39 +336,34 @@ def get_camera_mirror_html(camera_url, action):
                 border: 2px solid rgba(255, 255, 255, 0.1);
             }}
             
-            .action-overlay {{
+            .live-indicator {{
                 position: absolute;
-                bottom: 80px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(102, 126, 234, 0.9);
-                backdrop-filter: blur(10px);
-                padding: 15px 30px;
+                top: 80px;
+                left: 30px;
+                background: rgba(239, 68, 68, 0.9);
+                padding: 10px 20px;
                 border-radius: 20px;
-                font-size: 24px;
-                font-weight: 600;
-                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-                animation: slideUp 0.5s ease-in-out;
+                font-size: 20px;
+                font-weight: 700;
+                animation: blink 2s infinite;
             }}
             
-            @keyframes slideUp {{
-                from {{ opacity: 0; transform: translate(-50%, 20px); }}
-                to {{ opacity: 1; transform: translate(-50%, 0); }}
+            @keyframes blink {{
+                0%, 100% {{ opacity: 1; }}
+                50% {{ opacity: 0.5; }}
             }}
         </style>
     </head>
     <body>
         <div class="header">
-            📹 PEPPER'S VIEW
+            📹 {camera_name.upper()}
         </div>
         
         <div class="camera-container">
-            <img class="camera-feed" src="{camera_url}" alt="Camera Feed">
+            <img class="camera-feed" src="{camera_url}" alt="Live Feed">
         </div>
         
-        <div class="action-overlay">
-            Current: {action}
-        </div>
+        <div class="live-indicator">● LIVE</div>
     </body>
     </html>
     """
@@ -278,13 +371,39 @@ def get_camera_mirror_html(camera_url, action):
     return html
 
 
-def get_greeting_html(greeting_image_url=None, greeting_text="Hello!"):
-    """Generate HTML for greeting display."""
+def get_blank_screen_html():
+    """Generate HTML for blank screen."""
     
-    if greeting_image_url:
-        content = f'<img class="greeting-image" src="{greeting_image_url}" alt="Greeting">'
-    else:
-        content = f'<div class="greeting-text">{greeting_text}</div>'
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                background: #000;
+                height: 100vh;
+                overflow: hidden;
+            }
+        </style>
+    </head>
+    <body>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def get_error_html(error_message):
+    """Generate HTML for error display."""
     
     html = f"""
     <!DOCTYPE html>
@@ -300,7 +419,7 @@ def get_greeting_html(greeting_image_url=None, greeting_text="Hello!"):
             }}
             
             body {{
-                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
                 color: white;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
                 height: 100vh;
@@ -310,36 +429,37 @@ def get_greeting_html(greeting_image_url=None, greeting_text="Hello!"):
                 overflow: hidden;
             }}
             
-            .greeting-container {{
+            .error-container {{
                 text-align: center;
-                animation: bounceIn 0.8s ease-in-out;
-            }}
-            
-            @keyframes bounceIn {{
-                0% {{ opacity: 0; transform: scale(0.3); }}
-                50% {{ transform: scale(1.05); }}
-                70% {{ transform: scale(0.9); }}
-                100% {{ opacity: 1; transform: scale(1); }}
-            }}
-            
-            .greeting-text {{
-                font-size: 120px;
-                font-weight: bold;
-                text-shadow: 4px 4px 8px rgba(0, 0, 0, 0.3);
-            }}
-            
-            .greeting-image {{
-                max-width: 80%;
-                max-height: 80vh;
+                padding: 60px;
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
                 border-radius: 30px;
-                box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
-                border: 4px solid rgba(255, 255, 255, 0.3);
+                max-width: 80%;
+            }}
+            
+            .error-icon {{
+                font-size: 100px;
+                margin-bottom: 20px;
+            }}
+            
+            .error-title {{
+                font-size: 48px;
+                font-weight: bold;
+                margin-bottom: 20px;
+            }}
+            
+            .error-message {{
+                font-size: 28px;
+                opacity: 0.9;
             }}
         </style>
     </head>
     <body>
-        <div class="greeting-container">
-            {content}
+        <div class="error-container">
+            <div class="error-icon">⚠️</div>
+            <div class="error-title">ERROR</div>
+            <div class="error-message">{error_message}</div>
         </div>
     </body>
     </html>

@@ -1,8 +1,11 @@
 """
 Control Panel - Movement, dances, and robot controls
 Right side panel with all control buttons.
+
+FIXED VERSION - Corrected imports and voice commander initialization
 """
 
+import logging
 import threading
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -13,6 +16,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 
 from .audio_streamer import create_audio_streamer
 from .voice_commander_hybrid import create_hybrid_voice_commander
+
+logger = logging.getLogger(__name__)
 
 class ControlPanel(QWidget):
     """Panel for robot control buttons and settings."""
@@ -29,13 +34,15 @@ class ControlPanel(QWidget):
         self.tablet = tablet_ctrl
         self.pepper = pepper_conn
         
-        # Initialize audio streamer
-        self.audio_streamer = create_audio_streamer(pepper_conn.session)
+        # Initialize audio streamer (DISABLED - Phase 4A)
+        # self.audio_streamer = create_audio_streamer(pepper_conn.session)
+        self.audio_streamer = None  # Placeholder
         
-        # Initialize NATIVE voice commander (uses Pepper's microphones)
-        self.voice_commander = create_native_voice_commander(
-            pepper_conn, controllers, dances, tablet_ctrl
-        )
+        # Initialize HYBRID voice commander (DISABLED - Phase 4A)
+        # self.voice_commander = create_hybrid_voice_commander(
+        #     pepper_conn, controllers, dances, tablet_ctrl
+        # )
+        self.voice_commander = None  # Placeholder
         
         self._init_ui()
     
@@ -83,21 +90,25 @@ class ControlPanel(QWidget):
         
         up_btn = QPushButton("↑")
         up_btn.setFixedSize(60, 50)
+        up_btn.setToolTip("Move Forward (Arrow Up)")
         up_btn.pressed.connect(lambda: self._move('forward'))
         up_btn.released.connect(lambda: self._stop_move())
         
         down_btn = QPushButton("↓")
         down_btn.setFixedSize(60, 50)
+        down_btn.setToolTip("Move Backward (Arrow Down)")
         down_btn.pressed.connect(lambda: self._move('back'))
         down_btn.released.connect(lambda: self._stop_move())
         
         left_btn = QPushButton("←")
         left_btn.setFixedSize(60, 50)
+        left_btn.setToolTip("Strafe Left (Arrow Left)")
         left_btn.pressed.connect(lambda: self._move('left'))
         left_btn.released.connect(lambda: self._stop_move())
         
         right_btn = QPushButton("→")
         right_btn.setFixedSize(60, 50)
+        right_btn.setToolTip("Strafe Right (Arrow Right)")
         right_btn.pressed.connect(lambda: self._move('right'))
         right_btn.released.connect(lambda: self._stop_move())
         
@@ -117,10 +128,12 @@ class ControlPanel(QWidget):
         rotate_layout = QHBoxLayout()
         
         rotate_left_btn = QPushButton("Rotate L")
+        rotate_left_btn.setToolTip("Rotate Left (Q key)")
         rotate_left_btn.pressed.connect(lambda: self._move('rotate_left'))
         rotate_left_btn.released.connect(lambda: self._stop_move())
         
         rotate_right_btn = QPushButton("Rotate R")
+        rotate_right_btn.setToolTip("Rotate Right (E key)")
         rotate_right_btn.pressed.connect(lambda: self._move('rotate_right'))
         rotate_right_btn.released.connect(lambda: self._stop_move())
         
@@ -137,6 +150,7 @@ class ControlPanel(QWidget):
         self.speed_slider.setMinimum(10)
         self.speed_slider.setMaximum(50)
         self.speed_slider.setValue(30)
+        self.speed_slider.setToolTip("Adjust movement speed (or use +/- keys)")
         self.speed_slider.valueChanged.connect(self._update_speed)
         
         self.speed_label = QLabel("0.3")
@@ -156,16 +170,17 @@ class ControlPanel(QWidget):
         layout = QGridLayout()
         
         dances = [
-            ("👋\nWave", "wave"),
-            ("💃\nSpecial", "special"),
-            ("🤖\nRobot", "robot"),
-            ("🌙\nMoonwalk", "moonwalk")
+            ("👋\nWave", "wave", "Simple friendly wave (Key: 1)"),
+            ("💃\nSpecial", "special", "Energetic dance with squats (Key: 2)"),
+            ("🤖\nRobot", "robot", "Mechanical choppy movements (Key: 3)"),
+            ("🌙\nMoonwalk", "moonwalk", "Michael Jackson style (Key: 4)")
         ]
         
-        for i, (text, dance_id) in enumerate(dances):
+        for i, (text, dance_id, tooltip) in enumerate(dances):
             btn = QPushButton(text)
             btn.setObjectName("danceButton")
             btn.setMinimumHeight(70)
+            btn.setToolTip(tooltip)
             btn.clicked.connect(lambda checked, d=dance_id: self._trigger_dance(d))
             layout.addWidget(btn, i // 2, i % 2)
         
@@ -173,68 +188,32 @@ class ControlPanel(QWidget):
         return group
     
     def _create_audio_group(self):
-        """Create audio control group."""
-        group = QGroupBox("🎤 Audio & Voice")
+        """Create audio control group (PLACEHOLDERS - Phase 4A)."""
+        group = QGroupBox("🎤 Audio & Voice - Coming Soon")
         layout = QVBoxLayout()
         
-        # Live mic toggle
-        mic_layout = QHBoxLayout()
+        # Placeholder message
+        placeholder = QLabel(
+            "Audio features will include:\n\n"
+            "• Live microphone streaming\n"
+            "• Voice commands\n"
+            "• Volume control\n\n"
+            "Coming in future update!"
+        )
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setStyleSheet("""
+            QLabel {
+                color: #8e8e8e;
+                font-size: 12px;
+                padding: 30px;
+                background: #2d2d30;
+                border: 2px dashed #6e6e6e;
+                border-radius: 10px;
+            }
+        """)
+        placeholder.setMinimumHeight(150)
         
-        self.mic_button = QPushButton("🎙️ LIVE MIC")
-        self.mic_button.setObjectName("toggleButton")
-        self.mic_button.setCheckable(True)
-        self.mic_button.setMinimumHeight(50)
-        self.mic_button.toggled.connect(self._toggle_mic)
-        
-        self.mic_indicator = QLabel("⚫ OFF")
-        self.mic_indicator.setStyleSheet("font-size: 16px; font-weight: bold;")
-        
-        mic_layout.addWidget(self.mic_button)
-        mic_layout.addWidget(self.mic_indicator)
-        
-        layout.addLayout(mic_layout)
-        
-        # Voice commands toggle
-        voice_layout = QHBoxLayout()
-        
-        self.voice_button = QPushButton("🗣️ VOICE COMMANDS")
-        self.voice_button.setObjectName("toggleButton")
-        self.voice_button.setCheckable(True)
-        self.voice_button.setMinimumHeight(50)
-        self.voice_button.toggled.connect(self._toggle_voice_commands)
-        
-        self.voice_indicator = QLabel("⚫ OFF")
-        self.voice_indicator.setStyleSheet("font-size: 16px; font-weight: bold;")
-        
-        voice_layout.addWidget(self.voice_button)
-        voice_layout.addWidget(self.voice_indicator)
-        
-        layout.addLayout(voice_layout)
-        
-        # Voice commands help
-        help_label = QLabel("Say: 'Hi Pepper' or 'my name is [Name]' for handshake\n"
-                           "Uses Pepper's built-in microphones (no PC mic needed!)")
-        help_label.setStyleSheet("color: #8e8e8e; font-size: 11px; font-style: italic;")
-        help_label.setWordWrap(True)
-        layout.addWidget(help_label)
-        
-        # Volume control
-        volume_layout = QHBoxLayout()
-        volume_layout.addWidget(QLabel("🔊 Volume:"))
-        
-        self.volume_slider = QSlider(Qt.Horizontal)
-        self.volume_slider.setMinimum(0)
-        self.volume_slider.setMaximum(100)
-        self.volume_slider.setValue(80)
-        
-        self.volume_label = QLabel("80%")
-        self.volume_label.setMinimumWidth(40)
-        self.volume_slider.valueChanged.connect(self._update_volume)
-        
-        volume_layout.addWidget(self.volume_slider)
-        volume_layout.addWidget(self.volume_label)
-        
-        layout.addLayout(volume_layout)
+        layout.addWidget(placeholder)
         
         group.setLayout(layout)
         return group
@@ -343,7 +322,6 @@ class ControlPanel(QWidget):
         self.tablet.set_action(dance_id.capitalize(), "Starting...")
         
         # Execute dance in separate thread to avoid blocking
-        import threading
         thread = threading.Thread(target=self._execute_dance, args=(dance_id,))
         thread.daemon = True
         thread.start()
@@ -364,52 +342,29 @@ class ControlPanel(QWidget):
             self.tablet.set_action("Ready", "Dance failed")
     
     def _toggle_mic(self, checked):
-        """Toggle microphone streaming."""
-        if checked:
-            success = self.audio_streamer.start_streaming()
-            if success:
-                self.mic_indicator.setText("🔴 ON")
-                self.mic_indicator.setStyleSheet("color: #f87171; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Microphone: ON - Live streaming")
-            else:
-                self.mic_button.setChecked(False)
-                self.mic_indicator.setText("⚠️ ERROR")
-                self.mic_indicator.setStyleSheet("color: #fbbf24; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Microphone: Failed to start (install pyaudio)")
-        else:
-            self.audio_streamer.stop_streaming()
-            self.mic_indicator.setText("⚫ OFF")
-            self.mic_indicator.setStyleSheet("color: #8e8e8e; font-size: 16px; font-weight: bold;")
-            self.status_update_signal.emit("Microphone: OFF")
+        """Toggle microphone streaming (PLACEHOLDER)."""
+        QMessageBox.information(
+            self,
+            "Feature Coming Soon",
+            "Live microphone streaming will be available in a future update!"
+        )
+        if hasattr(self, 'mic_button'):
+            self.mic_button.setChecked(False)
     
     def _toggle_voice_commands(self, checked):
-        """Toggle voice command recognition."""
-        if checked:
-            success = self.voice_commander.start_listening()
-            if success:
-                self.voice_indicator.setText("🟢 LISTENING")
-                self.voice_indicator.setStyleSheet("color: #4ade80; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Voice commands: ON - Using Pepper's microphones")
-            else:
-                self.voice_button.setChecked(False)
-                self.voice_indicator.setText("⚠️ ERROR")
-                self.voice_indicator.setStyleSheet("color: #fbbf24; font-size: 16px; font-weight: bold;")
-                self.status_update_signal.emit("Voice commands: Failed to start")
-        else:
-            self.voice_commander.stop_listening()
-            self.voice_indicator.setText("⚫ OFF")
-            self.voice_indicator.setStyleSheet("color: #8e8e8e; font-size: 16px; font-weight: bold;")
-            self.status_update_signal.emit("Voice commands: OFF")
-    
-    def _change_tablet_mode(self, mode_id):
-        """Change tablet display mode."""
-        self.status_update_signal.emit(f"Tablet: {mode_id}")
-        # TODO: Implement tablet mode switching
+        """Toggle voice command recognition (PLACEHOLDER)."""
+        QMessageBox.information(
+            self,
+            "Feature Coming Soon",
+            "Voice commands will be available in a future update!"
+        )
+        if hasattr(self, 'voice_button'):
+            self.voice_button.setChecked(False)
     
     def _update_volume(self, value):
-        """Update audio volume."""
-        self.volume_label.setText(f"{value}%")
-        self.audio_streamer.set_volume(value / 100.0)
+        """Update audio volume (PLACEHOLDER)."""
+        # Do nothing - placeholder
+        pass
     
     def _show_robot_status(self):
         """Show robot status dialog."""
@@ -431,13 +386,17 @@ class ControlPanel(QWidget):
         """Cleanup resources."""
         # Stop any ongoing operations
         self._stop_move()
-        if self.mic_button.isChecked():
-            self.mic_button.setChecked(False)
-        if self.voice_button.isChecked():
-            self.voice_button.setChecked(False)
         
-        # Cleanup audio
-        self.audio_streamer.cleanup()
+        # Audio features disabled in Phase 4A
+        # if self.mic_button.isChecked():
+        #     self.mic_button.setChecked(False)
+        # if self.voice_button.isChecked():
+        #     self.voice_button.setChecked(False)
         
-        # Cleanup voice
-        self.voice_commander.stop_listening()
+        # Cleanup audio (disabled)
+        # self.audio_streamer.cleanup()
+        
+        # Cleanup voice (disabled)
+        # self.voice_commander.stop_listening()
+        
+        logger.info("✓ Control panel cleaned up")

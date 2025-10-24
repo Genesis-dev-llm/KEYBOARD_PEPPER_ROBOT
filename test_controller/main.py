@@ -2,7 +2,10 @@
 Main Entry Point for Pepper Keyboard Test Controller
 Orchestrates all components and starts the controller.
 
-Updated: Phase 2 - Added GUI support with PyQt5
+PHASE 1 FIXES:
+- Fixed dances scope bug (moved before GUI check)
+- Better error handling
+- Proper cleanup on exit
 """
 
 import sys
@@ -35,7 +38,8 @@ def run():
         epilog="""
 Examples:
   python test_keyboard_control.py 192.168.1.100
-  python -m test_controller.main --ip 192.168.1.100
+  python test_keyboard_control.py --gui
+  python -m test_controller.main --ip 192.168.1.100 --gui
         """
     )
     
@@ -80,23 +84,39 @@ Examples:
         print("="*60)
         print("Options:")
         print("  1. python test_keyboard_control.py 192.168.1.100")
-        print("  2. python -m test_controller.main --ip 192.168.1.100")
-        print("  3. Enter IP now:")
+        print("  2. python test_keyboard_control.py 192.168.1.100 --gui")
+        print("  3. python -m test_controller.main --ip 192.168.1.100")
+        print("  4. Enter IP now:")
         print()
         pepper_ip = input("Enter Pepper's IP address: ").strip()
         
         if not pepper_ip:
             print("No IP provided. Exiting.")
             sys.exit(1)
+        
+        # Save IP for next time
+        try:
+            with open(".pepper_ip", "w") as f:
+                f.write(pepper_ip)
+            logger.info(f"Saved IP to .pepper_ip")
+        except:
+            pass
     
     # ========================================================================
     # INITIALIZE COMPONENTS
     # ========================================================================
     
+    pepper_conn = None
+    base_ctrl = None
+    body_ctrl = None
+    video_ctrl = None
+    tablet_ctrl = None
+    input_handler = None
+    
     try:
         print("\n" + "="*60)
         print("  🤖 PEPPER KEYBOARD TEST CONTROLLER")
-        print("  Version 2.0.0 - Modular Edition")
+        print("  Version 2.0.0 - Phase 1: Smooth Movement")
         print("="*60 + "\n")
         
         # Connect to Pepper
@@ -113,6 +133,24 @@ Examples:
         logger.info("Initializing tablet display...")
         tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
         
+        # Initialize dances (MOVED BEFORE GUI CHECK - CRITICAL FIX!)
+        logger.info("Loading dance animations...")
+        dances = {
+            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
+            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
+            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
+            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
+        }
+        
+        # Initialize video server (PHASE 2 - CRITICAL!)
+        logger.info("Starting video streaming server...")
+        from .video_server import create_video_server
+        video_server = create_video_server(pepper_conn.session)
+        video_server.start()
+        
+        # Update tablet controller with video server
+        tablet_ctrl.video_server = video_server
+        
         # Check if GUI mode requested
         if args.gui:
             logger.info("Launching GUI mode...")
@@ -120,7 +158,8 @@ Examples:
                 from .gui import launch_gui
             except ImportError as e:
                 logger.error(f"Failed to import GUI: {e}")
-                logger.error("Install GUI dependencies: pip install PyQt5 pyaudio")
+                logger.error("Install GUI dependencies: pip install -r requirements_gui.txt")
+                logger.error("Required: PyQt5, pyaudio, SpeechRecognition, Pillow")
                 sys.exit(1)
             
             # Package controllers for GUI
@@ -131,40 +170,52 @@ Examples:
             }
             
             # Launch GUI (blocking call)
-            sys.exit(launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl))
+            exit_code = launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl)
+            sys.exit(exit_code)
         
-        # Initialize dances
-        logger.info("Loading dance animations...")
-        dances = {
-            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
-            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
-            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
-            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
-        }
-        
-        # Start base movement update thread (for continuous mode)
-        def base_update_loop():
-            while input_handler.running:
-                if input_handler.continuous_mode:
-                    base_ctrl.move_continuous()
-                time.sleep(0.05)  # 20Hz
+        # ====================================================================
+        # KEYBOARD MODE (non-GUI)
+        # ====================================================================
         
         # Initialize input handler
         logger.info("Initializing keyboard input handler...")
-        input_handler = InputHandler(pepper_conn, base_ctrl, body_ctrl, video_ctrl, tablet_ctrl, dances)
+        input_handler = InputHandler(
+            pepper_conn, base_ctrl, body_ctrl, 
+            video_ctrl, tablet_ctrl, dances
+        )
         
-        # Start base update thread
+        # Start base movement update thread (for continuous mode)
+        # CRITICAL: Update at 50Hz for smooth base movement!
+        def base_update_loop():
+            """Update base movement continuously at 50Hz"""
+            while input_handler.running:
+                try:
+                    if input_handler.continuous_mode:
+                        base_ctrl.move_continuous()
+                    time.sleep(0.02)  # 20ms = 50Hz (increased from 50ms/20Hz)
+                except Exception as e:
+                    logger.error(f"Movement update error: {e}")
+                    time.sleep(0.1)
+        
         base_thread = threading.Thread(target=base_update_loop, daemon=True)
         base_thread.start()
         
         logger.info("✓ All systems ready!")
+        logger.info("✓ Keyboard control active")
+        logger.info("✓ Base movement: 50Hz update rate")
+        
+        # Optional: Run movement diagnostic
+        if '--test-movement' in sys.argv:
+            logger.info("\n🔧 Running movement diagnostic...")
+            pepper_conn.test_movement()
+        
         print()
         
         # Run input handler (blocks until ESC pressed)
         input_handler.run()
         
     except KeyboardInterrupt:
-        logger.info("\nInterrupted by user")
+        logger.info("\nInterrupted by user (Ctrl+C)")
     except ConnectionError as e:
         logger.error(f"\n❌ CONNECTION FAILED: {e}")
         logger.error("Please check:")
@@ -178,15 +229,27 @@ Examples:
         sys.exit(1)
     finally:
         # Cleanup
-        logger.info("\nShutting down...")
+        logger.info("\nShutting down safely...")
         try:
-            if 'video_ctrl' in locals():
+            # Stop video if running
+            if video_ctrl:
                 video_ctrl.stop()
-            if 'pepper_conn' in locals():
+                logger.info("✓ Video feed stopped")
+            
+            # Stop all movement
+            if base_ctrl:
+                base_ctrl.stop()
+                logger.info("✓ Movement stopped")
+            
+            # Close connection
+            if pepper_conn:
                 pepper_conn.close()
-        except:
-            pass
-        logger.info("Goodbye!")
+                logger.info("✓ Connection closed")
+                
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+        
+        logger.info("Goodbye! 👋")
 
 if __name__ == "__main__":
     run()

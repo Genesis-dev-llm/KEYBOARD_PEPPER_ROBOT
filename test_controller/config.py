@@ -1,15 +1,20 @@
 """
 Configuration file for Pepper Keyboard Test Controller
 Contains all speed settings, limits, and constants.
+
+MOVEMENT FIXES:
+- Increased default speeds
+- Increased step sizes
+- Added turbo settings
 """
 
 # ============================================================================
-# SPEED SETTINGS
+# SPEED SETTINGS (INCREASED FOR BETTER RESPONSIVENESS)
 # ============================================================================
 
 # Base Movement Speeds (for translation/rotation)
-BASE_LINEAR_SPEED_DEFAULT = 0.3     # m/s (forward/back/strafe)
-BASE_ANGULAR_SPEED_DEFAULT = 0.5    # rad/s (rotation)
+BASE_LINEAR_SPEED_DEFAULT = 0.5     # m/s (increased from 0.3)
+BASE_ANGULAR_SPEED_DEFAULT = 0.7    # rad/s (increased from 0.5)
 
 # Body Movement Speed (for joints: arms, head, hands)
 BODY_SPEED_DEFAULT = 0.3            # joint speed fraction (0.0-1.0)
@@ -19,18 +24,27 @@ SPEED_STEP = 0.05                   # How much +/- changes speed
 
 # Speed limits
 MIN_SPEED = 0.1
-MAX_SPEED = 0.5
+MAX_SPEED = 1.0  # Increased from 0.5 for turbo mode
+
+# Turbo mode
+TURBO_MULTIPLIER = 1.5  # Turbo is 1.5x normal speed
 
 # ============================================================================
-# MOVEMENT SETTINGS
+# MOVEMENT SETTINGS (INCREASED FOR VISIBILITY)
 # ============================================================================
 
 # Incremental mode step sizes
-LINEAR_STEP = 0.05      # 5cm per keypress
-ANGULAR_STEP = 0.2      # ~11 degrees per keypress
+LINEAR_STEP = 0.1       # 10cm per keypress (increased from 5cm)
+ANGULAR_STEP = 0.3      # ~17 degrees per keypress (increased from ~11)
 HEAD_STEP = 0.1         # radians per keypress
 ARM_STEP = 0.1          # radians per keypress
 WRIST_STEP = 0.2        # radians per keypress
+
+# Smoothing factor (for continuous mode)
+SMOOTHING_FACTOR = 0.5  # 0.0=instant, 1.0=never reach target (increased from 0.3)
+
+# Update rate
+BASE_UPDATE_HZ = 50     # Movement update frequency (increased from 20Hz)
 
 # ============================================================================
 # JOINT LIMITS (radians)
@@ -83,21 +97,33 @@ VIDEO_TIMEOUT = 5  # seconds
 # DANCE SETTINGS
 # ============================================================================
 
-# Special dance settings
-SPECIAL_DANCE_CYCLES = 15
-SPECIAL_DANCE_SPEED = 0.95
-SPECIAL_DANCE_HIP_ANGLE = 0.4
-SPECIAL_DANCE_KNEE_ANGLE = 0.6
-SPECIAL_DANCE_TIMING = 0.12  # seconds per bounce
+# Special dance settings (REDUCED for safety - Phase 3)
+SPECIAL_DANCE_CYCLES = 10           # Reduced from 15
+SPECIAL_DANCE_SPEED = 0.7           # Reduced from 0.95
+SPECIAL_DANCE_HIP_ANGLE = 0.35      # Reduced from 0.4
+SPECIAL_DANCE_KNEE_ANGLE = 0.55     # Reduced from 0.6
+SPECIAL_DANCE_TIMING = 0.15         # Increased from 0.12
 
 # Robot dance settings
 ROBOT_SPEED = 0.4
-ROBOT_PAUSE = 0.3
+ROBOT_PAUSE = 0.4  # Increased from 0.3
 
-# Moonwalk settings
-MOONWALK_LEAN_ANGLE = 0.12  # Forward lean (safe)
-MOONWALK_KNEE_BEND = 0.25   # Stability
-MOONWALK_GLIDE_DISTANCE = -0.3  # Backward (meters)
+# Moonwalk settings (SAFE - Phase 3)
+MOONWALK_LEAN_ANGLE = 0.08          # REDUCED from 0.12 - CRITICAL SAFETY
+MOONWALK_KNEE_BEND = 0.20           # Reduced from 0.25
+MOONWALK_GLIDE_DISTANCE = -0.2      # Reduced from -0.3
+
+# ============================================================================
+# MOTION CONFIGURATION
+# ============================================================================
+
+# Autonomous Life control
+DISABLE_AUTONOMOUS_LIFE = True
+
+# Motion protections
+ENABLE_FOOT_CONTACT_PROTECTION = False      # Disable for better movement
+ENABLE_EXTERNAL_COLLISION_PROTECTION = False # Reduce restrictions
+ENABLE_MOVE_ARMS_DURING_MOVEMENT = False     # No arm sway
 
 # ============================================================================
 # HELPER FUNCTIONS
