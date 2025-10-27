@@ -1,12 +1,8 @@
 """
-Body Controller
-Handles Pepper's upper body: head, arms, wrists, and hands.
+Body Controller - FINAL FIXED VERSION
+Uses angleInterpolationWithSpeed() for smooth, natural movement.
 
-PHASE 1 IMPROVEMENTS:
-- Added thread safety with locks
-- Better error handling
-- Joint state tracking
-- Emergency stop support
+CRITICAL FIX: Replaced all setAngles() with angleInterpolationWithSpeed()
 """
 
 import logging
@@ -16,7 +12,7 @@ from .. import config
 logger = logging.getLogger(__name__)
 
 class BodyController:
-    """Controls Pepper's head, arms, wrists, and hands - Thread-safe version."""
+    """Controls Pepper's head, arms, wrists, and hands - SMOOTH version."""
     
     def __init__(self, motion_service):
         self.motion = motion_service
@@ -24,7 +20,7 @@ class BodyController:
         # Thread safety
         self._lock = threading.Lock()
         
-        # Body movement speed (can be adjusted with [/] keys)
+        # Body movement speed (fraction of max speed, 0.0-1.0)
         self.body_speed = config.BODY_SPEED_DEFAULT
         
         # Current head position
@@ -39,10 +35,10 @@ class BodyController:
     # ========================================================================
     
     def move_head(self, direction):
-        """Move head incrementally (thread-safe)."""
+        """Move head incrementally - SMOOTH version."""
         with self._lock:
             if self._emergency_stopped:
-                logger.warning("Emergency stop active - movement blocked")
+                logger.warning("Emergency stop active")
                 return
             
             if direction == 'up':
@@ -67,23 +63,28 @@ class BodyController:
                 )
             
             try:
-                self.motion.setAngles(
-                    ["HeadYaw", "HeadPitch"], 
-                    [self.head_yaw, self.head_pitch], 
+                # FIXED: Use angleInterpolationWithSpeed for smooth movement
+                self.motion.angleInterpolationWithSpeed(
+                    ["HeadYaw", "HeadPitch"],
+                    [self.head_yaw, self.head_pitch],
                     self.body_speed
                 )
-                logger.info(f"Head: yaw={self.head_yaw:.2f}, pitch={self.head_pitch:.2f}")
+                logger.debug(f"Head: yaw={self.head_yaw:.2f}, pitch={self.head_pitch:.2f}")
             except Exception as e:
                 logger.error(f"Head movement failed: {e}")
     
     def reset_head(self):
-        """Reset head to center position (thread-safe)."""
+        """Reset head to center position."""
         with self._lock:
             self.head_yaw = 0.0
             self.head_pitch = 0.0
             
             try:
-                self.motion.setAngles(["HeadYaw", "HeadPitch"], [0.0, 0.0], self.body_speed)
+                self.motion.angleInterpolationWithSpeed(
+                    ["HeadYaw", "HeadPitch"],
+                    [0.0, 0.0],
+                    self.body_speed
+                )
                 logger.info("Head reset to center")
             except Exception as e:
                 logger.error(f"Head reset failed: {e}")
@@ -93,7 +94,7 @@ class BodyController:
     # ========================================================================
     
     def move_shoulder_pitch(self, side, direction):
-        """Move shoulder pitch (up/down) - Thread-safe."""
+        """Move shoulder pitch (up/down) - SMOOTH version."""
         with self._lock:
             if self._emergency_stopped:
                 return
@@ -109,13 +110,20 @@ class BodyController:
                     new_angle = current + config.ARM_STEP
                 
                 new_angle = config.clamp_joint(joint_name, new_angle)
-                self.motion.setAngles(joint_name, new_angle, self.body_speed)
-                logger.info(f"{joint_name}: {new_angle:.2f}")
+                
+                # FIXED: Use angleInterpolationWithSpeed
+                self.motion.angleInterpolationWithSpeed(
+                    joint_name,
+                    new_angle,
+                    self.body_speed
+                )
+                
+                logger.debug(f"{joint_name}: {new_angle:.2f}")
             except Exception as e:
                 logger.error(f"Shoulder movement failed: {e}")
     
     def move_shoulder_roll(self, side, direction='out'):
-        """Move shoulder roll (extend arm sideways) - Thread-safe."""
+        """Move shoulder roll (extend arm sideways) - SMOOTH."""
         with self._lock:
             if self._emergency_stopped:
                 return
@@ -126,15 +134,20 @@ class BodyController:
                 current = self.motion.getAngles(joint_name, True)[0]
                 
                 if side == 'L':
-                    # Left arm: positive = out
                     new_angle = current + config.ARM_STEP if direction == 'out' else current - config.ARM_STEP
                 else:  # Right arm
-                    # Right arm: negative = out
                     new_angle = current - config.ARM_STEP if direction == 'out' else current + config.ARM_STEP
                 
                 new_angle = config.clamp_joint(joint_name, new_angle)
-                self.motion.setAngles(joint_name, new_angle, self.body_speed)
-                logger.info(f"{joint_name}: {new_angle:.2f}")
+                
+                # FIXED: Use angleInterpolationWithSpeed
+                self.motion.angleInterpolationWithSpeed(
+                    joint_name,
+                    new_angle,
+                    self.body_speed
+                )
+                
+                logger.debug(f"{joint_name}: {new_angle:.2f}")
             except Exception as e:
                 logger.error(f"Shoulder roll failed: {e}")
     
@@ -143,7 +156,7 @@ class BodyController:
     # ========================================================================
     
     def move_elbow_roll(self, side, direction):
-        """Move elbow roll (bend/straighten) - Thread-safe."""
+        """Move elbow roll (bend/straighten) - SMOOTH."""
         with self._lock:
             if self._emergency_stopped:
                 return
@@ -154,21 +167,26 @@ class BodyController:
                 current = self.motion.getAngles(joint_name, True)[0]
                 
                 if side == 'L':
-                    # Left arm: more negative = more bent
                     if direction == 'bend':
                         new_angle = current - config.ARM_STEP
                     else:  # straighten
                         new_angle = current + config.ARM_STEP
                 else:  # Right arm
-                    # Right arm: more positive = more bent
                     if direction == 'bend':
                         new_angle = current + config.ARM_STEP
                     else:  # straighten
                         new_angle = current - config.ARM_STEP
                 
                 new_angle = config.clamp_joint(joint_name, new_angle)
-                self.motion.setAngles(joint_name, new_angle, self.body_speed)
-                logger.info(f"{joint_name}: {new_angle:.2f}")
+                
+                # FIXED: Use angleInterpolationWithSpeed
+                self.motion.angleInterpolationWithSpeed(
+                    joint_name,
+                    new_angle,
+                    self.body_speed
+                )
+                
+                logger.debug(f"{joint_name}: {new_angle:.2f}")
             except Exception as e:
                 logger.error(f"Elbow movement failed: {e}")
     
@@ -177,7 +195,7 @@ class BodyController:
     # ========================================================================
     
     def rotate_wrist(self, side, direction):
-        """Rotate wrist - Thread-safe."""
+        """Rotate wrist - SMOOTH."""
         with self._lock:
             if self._emergency_stopped:
                 return
@@ -187,14 +205,21 @@ class BodyController:
             try:
                 current = self.motion.getAngles(joint_name, True)[0]
                 
-                if direction == 'ccw':  # Counter-clockwise
+                if direction == 'ccw':
                     new_angle = current + config.WRIST_STEP
-                else:  # cw (clockwise)
+                else:  # cw
                     new_angle = current - config.WRIST_STEP
                 
                 new_angle = config.clamp_joint(joint_name, new_angle)
-                self.motion.setAngles(joint_name, new_angle, self.body_speed)
-                logger.info(f"{joint_name} rotated: {new_angle:.2f}")
+                
+                # FIXED: Use angleInterpolationWithSpeed
+                self.motion.angleInterpolationWithSpeed(
+                    joint_name,
+                    new_angle,
+                    self.body_speed
+                )
+                
+                logger.debug(f"{joint_name}: {new_angle:.2f}")
             except Exception as e:
                 logger.error(f"Wrist rotation failed: {e}")
     
@@ -203,7 +228,7 @@ class BodyController:
     # ========================================================================
     
     def move_hand(self, side, state):
-        """Open or close hand - Thread-safe."""
+        """Open or close hand - SMOOTH."""
         with self._lock:
             if self._emergency_stopped:
                 return
@@ -212,8 +237,13 @@ class BodyController:
             value = 1.0 if state == 'open' else 0.0
             
             try:
-                self.motion.setAngles(joint_name, value, 0.3)
-                logger.info(f"{joint_name} {state}")
+                # FIXED: Use angleInterpolationWithSpeed (faster for hands)
+                self.motion.angleInterpolationWithSpeed(
+                    joint_name,
+                    value,
+                    0.5  # Faster speed for hands
+                )
+                logger.debug(f"{joint_name}: {state}")
             except Exception as e:
                 logger.error(f"Hand movement failed: {e}")
     
@@ -222,25 +252,25 @@ class BodyController:
     # ========================================================================
     
     def increase_speed(self):
-        """Increase body movement speed (thread-safe)."""
+        """Increase body movement speed."""
         with self._lock:
             self.body_speed = config.clamp(
                 self.body_speed + config.SPEED_STEP,
                 config.MIN_SPEED,
-                config.MAX_SPEED
+                1.0  # Max for fractionMaxSpeed is 1.0
             )
-            logger.info(f"Body speed increased: {self.body_speed:.2f}")
+            logger.info(f"⬆️ Body speed: {self.body_speed:.2f}")
             return self.body_speed
     
     def decrease_speed(self):
-        """Decrease body movement speed (thread-safe)."""
+        """Decrease body movement speed."""
         with self._lock:
             self.body_speed = config.clamp(
                 self.body_speed - config.SPEED_STEP,
                 config.MIN_SPEED,
-                config.MAX_SPEED
+                1.0
             )
-            logger.info(f"Body speed decreased: {self.body_speed:.2f}")
+            logger.info(f"⬇️ Body speed: {self.body_speed:.2f}")
             return self.body_speed
     
     # ========================================================================
@@ -250,21 +280,21 @@ class BodyController:
     def emergency_stop(self):
         """Emergency stop - blocks all body movement."""
         with self._lock:
-            logger.error("🚨 EMERGENCY STOP - Body movement")
+            logger.error("🚨 EMERGENCY STOP - Body")
             self._emergency_stopped = True
     
     def resume_from_emergency(self):
         """Resume movement after emergency stop."""
         with self._lock:
             self._emergency_stopped = False
-            logger.info("✓ Emergency stop cleared - body movement enabled")
+            logger.info("✓ Emergency stop cleared")
     
     # ========================================================================
     # STATE QUERIES
     # ========================================================================
     
     def get_state(self):
-        """Get current body state (thread-safe)."""
+        """Get current body state."""
         with self._lock:
             return {
                 'head_yaw': self.head_yaw,

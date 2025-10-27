@@ -1,12 +1,8 @@
 """
-Keyboard Input Handler
-Processes keyboard events and dispatches to appropriate controllers.
+MODULE: test_controller/input_handler.py
+Keyboard Input Handler - FIXED VERSION (optional improvement)
 
-PHASE 1 IMPROVEMENTS:
-- Added key debouncing to prevent spam
-- Better emergency stop handling
-- Improved error handling
-- Clear status messages
+FIXED: Added immediate stop() call in on_release() for better responsiveness
 """
 
 import logging
@@ -52,9 +48,7 @@ class InputHandler:
     def on_press(self, key):
         """Handle key press events."""
         try:
-            # ================================================================
-            # EMERGENCY STOP - No debouncing, instant response
-            # ================================================================
+            # EMERGENCY STOP
             if key == Key.esc:
                 logger.info("ESC pressed - shutting down...")
                 self.tablet.set_action("Emergency Stop", "Shutting down...")
@@ -63,9 +57,7 @@ class InputHandler:
                 self.video.stop()
                 return False
             
-            # ================================================================
             # MODE TOGGLE
-            # ================================================================
             if hasattr(key, 'char') and key.char == 't':
                 if not self._should_execute('mode_toggle'):
                     return
@@ -79,9 +71,7 @@ class InputHandler:
                     self.tablet.set_action("Stopped", "Switched to incremental mode")
                 return
             
-            # ================================================================
             # BASE MOVEMENT
-            # ================================================================
             if self.continuous_mode:
                 # CONTINUOUS MODE - Hold to move
                 if key == Key.up:
@@ -120,9 +110,7 @@ class InputHandler:
                         self.base.move_incremental('rotate_right')
             
             if hasattr(key, 'char'):
-                # ============================================================
                 # TABLET CONTROLS
-                # ============================================================
                 if key.char == 'm' and self._should_execute('tablet_mode'):
                     self.tablet.cycle_mode()
                     logger.info(f"📱 Tablet mode: {self.tablet.get_current_mode()}")
@@ -133,9 +121,7 @@ class InputHandler:
                     logger.info("👋 Showing greeting")
                     return
                 
-                # ============================================================
                 # VIDEO TOGGLE
-                # ============================================================
                 elif key.char == 'v' and self._should_execute('video_toggle'):
                     if self.video.is_active():
                         self.video.stop()
@@ -143,9 +129,7 @@ class InputHandler:
                         self.video.start()
                     return
                 
-                # ============================================================
                 # HEAD CONTROLS
-                # ============================================================
                 if key.char == 'w' and self._should_execute('head_up'):
                     self.body.move_head('up')
                     self.tablet.set_action("Looking Around", "Head up")
@@ -162,9 +146,7 @@ class InputHandler:
                     self.body.reset_head()
                     self.tablet.set_action("Ready", "Head centered")
                 
-                # ============================================================
                 # SHOULDER CONTROLS
-                # ============================================================
                 elif key.char == 'u' and self._should_execute('l_shoulder_up'):
                     self.body.move_shoulder_pitch('L', 'up')
                     self.tablet.set_action("Moving Arms", "Left shoulder up")
@@ -184,9 +166,7 @@ class InputHandler:
                     self.body.move_shoulder_roll('R', 'out')
                     self.tablet.set_action("Moving Arms", "Right arm out")
                 
-                # ============================================================
                 # ELBOW CONTROLS
-                # ============================================================
                 elif key.char == '7' and self._should_execute('l_elbow_bend'):
                     self.body.move_elbow_roll('L', 'bend')
                 elif key.char == '9' and self._should_execute('l_elbow_straight'):
@@ -196,9 +176,7 @@ class InputHandler:
                 elif key.char == '0' and self._should_execute('r_elbow_straight'):
                     self.body.move_elbow_roll('R', 'straighten')
                 
-                # ============================================================
                 # WRIST CONTROLS
-                # ============================================================
                 elif key.char == ',' and self._should_execute('l_wrist_ccw'):
                     self.body.rotate_wrist('L', 'ccw')
                 elif key.char == '.' and self._should_execute('l_wrist_cw'):
@@ -208,9 +186,7 @@ class InputHandler:
                 elif key.char == "'" and self._should_execute('r_wrist_cw'):
                     self.body.rotate_wrist('R', 'cw')
                 
-                # ============================================================
                 # HAND CONTROLS (with Shift)
-                # ============================================================
                 elif key.char == '<':  # Shift+,
                     self.body.move_hand('L', 'open')
                 elif key.char == '>':  # Shift+.
@@ -220,9 +196,7 @@ class InputHandler:
                 elif key.char == ')':  # Shift+0
                     self.body.move_hand('R', 'close')
                 
-                # ============================================================
                 # SPEED CONTROLS
-                # ============================================================
                 elif key.char in ['+', '='] and self._should_execute('speed_up_base'):
                     speed = self.base.increase_speed()
                     logger.info(f"⬆️  Base speed: {speed:.2f} m/s")
@@ -236,16 +210,14 @@ class InputHandler:
                     speed = self.body.decrease_speed()
                     logger.info(f"⬇️  Body speed: {speed:.2f}")
                 
-                # TURBO MODE (NEW!)
+                # TURBO MODE
                 elif key.char == 'x' and self._should_execute('turbo_toggle'):
                     turbo = self.base.toggle_turbo()
                     status = "ENABLED 🚀" if turbo else "DISABLED"
                     logger.info(f"Turbo mode: {status}")
-                    self.tablet.set_action("Turbo Mode", status)("⬇️  Body speed: {speed:.2f}")
+                    self.tablet.set_action("Turbo Mode", status)
                 
-                # ============================================================
-                # DANCES - Only if not already dancing
-                # ============================================================
+                # DANCES
                 elif key.char == '1' and not self._dance_running:
                     self._execute_dance('wave', "Hello!")
                 elif key.char == '2' and not self._dance_running:
@@ -255,17 +227,13 @@ class InputHandler:
                 elif key.char == '4' and not self._dance_running:
                     self._execute_dance('moonwalk', "Shamone!")
                 
-                # ============================================================
                 # SYSTEM COMMANDS
-                # ============================================================
                 elif key.char == 'p' and self._should_execute('status'):
                     self._print_status()
                 elif key.char == 'z' and self._should_execute('reset_pos'):
                     self.base.reset_position()
             
-            # ============================================================
             # SPACE BAR - STOP
-            # ============================================================
             elif key == Key.space:
                 self.base.stop()
                 self.tablet.set_action("Stopped", "All movement halted")
@@ -277,18 +245,22 @@ class InputHandler:
             logger.error(f"Error handling key press: {e}")
     
     def on_release(self, key):
-        """Handle key release events."""
+        """Handle key release events - FIXED VERSION."""
         try:
+            # Only stop continuous movement when keys released
             if self.continuous_mode:
                 if key == Key.up or key == Key.down:
                     self.base.set_continuous_velocity('x', 0.0)
+                    self.base.stop()  # FIXED: Immediate stop
                     self.tablet.set_action("Ready", "Waiting for input...")
                 elif key == Key.left or key == Key.right:
                     self.base.set_continuous_velocity('y', 0.0)
+                    self.base.stop()  # FIXED: Immediate stop
                     self.tablet.set_action("Ready", "Waiting for input...")
                 elif hasattr(key, 'char'):
                     if key.char in ['q', 'e']:
                         self.base.set_continuous_velocity('theta', 0.0)
+                        self.base.stop()  # FIXED: Immediate stop
                         self.tablet.set_action("Ready", "Waiting for input...")
         except:
             pass
@@ -362,7 +334,7 @@ class InputHandler:
         """Print control instructions."""
         mode_str = "CONTINUOUS (hold)" if self.continuous_mode else "INCREMENTAL (click)"
         print("\n" + "="*60)
-        print("  🎮 PEPPER KEYBOARD CONTROLS - PHASE 1")
+        print("  🎮 PEPPER KEYBOARD CONTROLS")
         print("="*60)
         print(f"  Movement Mode: {mode_str}")
         print("  T: Toggle mode | V: Video | M: Tablet mode | H: Greeting")
@@ -387,14 +359,8 @@ class InputHandler:
         print("    </> (Shift+,/.): Left hand")
         print("    (/) (Shift+9/0): Right hand")
         print()
-        print("  TABLET:")
-        print("    M: Cycle display mode")
-        print("    H: Show greeting")
-        print()
         print("  DANCES:")
         print("    1: Wave | 2: Special 💃 | 3: Robot 🤖 | 4: Moonwalk 🌙")
         print()
-        print("  ✨ NEW: Smooth movement with velocity ramping!")
-        print("  ✨ NEW: Thread-safe controls!")
-        print("  ✨ NEW: Dance blocking (one at a time)!")
+        print("  ✨ SMOOTH & RESPONSIVE!")
         print("="*60 + "\n")

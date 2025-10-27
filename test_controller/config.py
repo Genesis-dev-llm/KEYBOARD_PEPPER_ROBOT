@@ -1,53 +1,58 @@
 """
 Configuration file for Pepper Keyboard Test Controller
-Contains all speed settings, limits, and constants.
+FIXED VERSION - Proper speeds and smoothing for responsive movement.
 
-MOVEMENT FIXES:
-- Increased default speeds
-- Increased step sizes
-- Added turbo settings
+KEY FIXES:
+- Reduced smoothing factor (0.5 -> 0.15) for responsiveness
+- Proper speed defaults
+- Correct update rate
+- Better step sizes
 """
 
 # ============================================================================
-# SPEED SETTINGS (INCREASED FOR BETTER RESPONSIVENESS)
+# SPEED SETTINGS - OPTIMIZED
 # ============================================================================
 
-# Base Movement Speeds (for translation/rotation)
-BASE_LINEAR_SPEED_DEFAULT = 0.5     # m/s (increased from 0.3)
-BASE_ANGULAR_SPEED_DEFAULT = 0.7    # rad/s (increased from 0.5)
+# Base Movement Speeds (m/s and rad/s)
+BASE_LINEAR_SPEED_DEFAULT = 0.4     # m/s (slightly reduced for safety)
+BASE_ANGULAR_SPEED_DEFAULT = 0.6    # rad/s (slightly reduced for safety)
 
-# Body Movement Speed (for joints: arms, head, hands)
-BODY_SPEED_DEFAULT = 0.3            # joint speed fraction (0.0-1.0)
+# Body Movement Speed (0.0-1.0, fraction of max speed)
+BODY_SPEED_DEFAULT = 0.3
 
-# Speed adjustment step size
-SPEED_STEP = 0.05                   # How much +/- changes speed
+# Speed adjustment step
+SPEED_STEP = 0.05
 
 # Speed limits
 MIN_SPEED = 0.1
-MAX_SPEED = 1.0  # Increased from 0.5 for turbo mode
+MAX_SPEED = 1.0
 
-# Turbo mode
-TURBO_MULTIPLIER = 1.5  # Turbo is 1.5x normal speed
+# Turbo mode multiplier
+TURBO_MULTIPLIER = 1.5
 
 # ============================================================================
-# MOVEMENT SETTINGS (INCREASED FOR VISIBILITY)
+# MOVEMENT SETTINGS - OPTIMIZED
 # ============================================================================
 
 # Incremental mode step sizes
-LINEAR_STEP = 0.1       # 10cm per keypress (increased from 5cm)
-ANGULAR_STEP = 0.3      # ~17 degrees per keypress (increased from ~11)
-HEAD_STEP = 0.1         # radians per keypress
-ARM_STEP = 0.1          # radians per keypress
-WRIST_STEP = 0.2        # radians per keypress
+LINEAR_STEP = 0.08      # 8cm per keypress (reduced for precision)
+ANGULAR_STEP = 0.25     # ~14 degrees (reduced for precision)
+HEAD_STEP = 0.08        # radians per keypress (reduced)
+ARM_STEP = 0.08         # radians per keypress (reduced)
+WRIST_STEP = 0.15       # radians per keypress (reduced)
 
-# Smoothing factor (for continuous mode)
-SMOOTHING_FACTOR = 0.5  # 0.0=instant, 1.0=never reach target (increased from 0.3)
+# CRITICAL FIX: Smoothing factor
+# Lower = more responsive, Higher = smoother but sluggish
+# Old value: 0.5 (WAY TOO HIGH)
+# New value: 0.15 (responsive but still smooth)
+SMOOTHING_FACTOR = 0.15  # FIXED - was 0.5
 
 # Update rate
-BASE_UPDATE_HZ = 50     # Movement update frequency (increased from 20Hz)
+BASE_UPDATE_HZ = 50     # 50Hz for smooth movement
+UPDATE_INTERVAL = 1.0 / BASE_UPDATE_HZ  # 0.02 seconds
 
 # ============================================================================
-# JOINT LIMITS (radians)
+# JOINT LIMITS (radians) - unchanged
 # ============================================================================
 
 # Head limits
@@ -76,9 +81,9 @@ R_ELBOW_ROLL_MAX = 1.5620
 WRIST_YAW_MIN = -1.8238
 WRIST_YAW_MAX = 1.8238
 
-# Hand limits (open/close)
-HAND_MIN = 0.0  # Closed
-HAND_MAX = 1.0  # Open
+# Hand limits
+HAND_MIN = 0.0
+HAND_MAX = 1.0
 
 # Hip/Knee limits (for dances)
 HIP_PITCH_MIN = -1.0
@@ -91,39 +96,55 @@ KNEE_PITCH_MAX = 1.0
 # ============================================================================
 
 VIDEO_PORT = 8080
-VIDEO_TIMEOUT = 5  # seconds
+VIDEO_TIMEOUT = 5
 
 # ============================================================================
-# DANCE SETTINGS
+# DANCE SETTINGS - SAFE VALUES
 # ============================================================================
 
-# Special dance settings (REDUCED for safety - Phase 3)
-SPECIAL_DANCE_CYCLES = 10           # Reduced from 15
-SPECIAL_DANCE_SPEED = 0.7           # Reduced from 0.95
-SPECIAL_DANCE_HIP_ANGLE = 0.35      # Reduced from 0.4
-SPECIAL_DANCE_KNEE_ANGLE = 0.55     # Reduced from 0.6
-SPECIAL_DANCE_TIMING = 0.15         # Increased from 0.12
+# Special dance
+SPECIAL_DANCE_CYCLES = 8
+SPECIAL_DANCE_SPEED = 0.6
+SPECIAL_DANCE_HIP_ANGLE = 0.30
+SPECIAL_DANCE_KNEE_ANGLE = 0.50
+SPECIAL_DANCE_TIMING = 0.15
 
-# Robot dance settings
+# Robot dance
 ROBOT_SPEED = 0.4
-ROBOT_PAUSE = 0.4  # Increased from 0.3
+ROBOT_PAUSE = 0.4
 
-# Moonwalk settings (SAFE - Phase 3)
-MOONWALK_LEAN_ANGLE = 0.08          # REDUCED from 0.12 - CRITICAL SAFETY
-MOONWALK_KNEE_BEND = 0.20           # Reduced from 0.25
-MOONWALK_GLIDE_DISTANCE = -0.2      # Reduced from -0.3
+# Moonwalk - SAFE
+MOONWALK_LEAN_ANGLE = 0.08
+MOONWALK_KNEE_BEND = 0.20
+MOONWALK_GLIDE_DISTANCE = -0.2
 
 # ============================================================================
 # MOTION CONFIGURATION
 # ============================================================================
 
-# Autonomous Life control
+# Autonomous Life
 DISABLE_AUTONOMOUS_LIFE = True
 
-# Motion protections
-ENABLE_FOOT_CONTACT_PROTECTION = False      # Disable for better movement
-ENABLE_EXTERNAL_COLLISION_PROTECTION = False # Reduce restrictions
+# Motion protections (BALANCED - not fully disabled)
+ENABLE_FOOT_CONTACT_PROTECTION = True      # KEEP ENABLED for safety
+ENABLE_EXTERNAL_COLLISION_PROTECTION = True  # KEEP ENABLED but permissive
 ENABLE_MOVE_ARMS_DURING_MOVEMENT = False     # No arm sway
+
+# Stiffness management
+ENABLE_SMART_STIFFNESS = True              # ENABLE for adaptive control
+ENABLE_IDLE_POSTURE = False                # Disable random movements
+ENABLE_BREATHING = False                   # Disable breathing motion
+
+# ============================================================================
+# INVERSE KINEMATICS SETTINGS (NEW)
+# ============================================================================
+
+# Use IK for arm movements (smoother, more natural)
+USE_INVERSE_KINEMATICS = True
+
+# IK solver settings
+IK_MAX_ITERATIONS = 100
+IK_TOLERANCE = 0.01  # meters
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -158,4 +179,4 @@ def clamp_joint(joint_name, value):
         min_val, max_val = limits[joint_name]
         return clamp(value, min_val, max_val)
     
-    return value  # No limit found, return as-is
+    return value

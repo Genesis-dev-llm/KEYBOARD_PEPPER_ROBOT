@@ -1,12 +1,12 @@
 """
-Pepper Robot Connection Handler
-Manages connection to Pepper and service initialization.
+Pepper Robot Connection Handler - FIXED VERSION
+Proper motion configuration for smooth, responsive movement.
 
-MOVEMENT FIXES:
-- Aggressive Autonomous Life disabling
-- Proper motion configuration
-- Explicit wheel enabling
-- Movement mode setup
+KEY FIXES:
+- Balanced collision protection (not fully disabled)
+- Proper stiffness management
+- Correct motion mode initialization
+- Smart autonomous life handling
 """
 
 import qi
@@ -27,10 +27,11 @@ class PepperConnection:
         self.tts = None
         self.battery = None
         self.autonomous_life = None
+        self.awareness = None
         
         self._connect()
         self._initialize_services()
-        self._configure_motion()  # NEW: Critical for base movement
+        self._configure_motion()  # CRITICAL: Proper motion setup
         self._initialize_robot()
     
     def _connect(self):
@@ -52,114 +53,147 @@ class PepperConnection:
             self.posture = self.session.service("ALRobotPosture")
             self.tts = self.session.service("ALTextToSpeech")
             self.battery = self.session.service("ALBattery")
-            logger.info("✓ All services initialized")
+            logger.info("✓ Core services initialized")
             
-            # CRITICAL: Disable Autonomous Life more aggressively
+            # CRITICAL: Handle Autonomous Life and Basic Awareness
             try:
                 self.autonomous_life = self.session.service("ALAutonomousLife")
-                current_state = self.autonomous_life.getState()
+                self.awareness = self.session.service("ALBasicAwareness")
                 
+                # Disable autonomous life
+                current_state = self.autonomous_life.getState()
                 if current_state != "disabled":
-                    logger.info(f"Autonomous Life state: {current_state}")
-                    logger.info("Disabling Autonomous Life...")
-                    
-                    # Stop all autonomous behaviors
-                    self.autonomous_life.stopAll()
-                    time.sleep(0.5)
-                    
-                    # Set to disabled
+                    logger.info(f"Disabling Autonomous Life (currently: {current_state})")
                     self.autonomous_life.setState("disabled")
                     time.sleep(0.5)
-                    
-                    # Verify
-                    new_state = self.autonomous_life.getState()
-                    if new_state == "disabled":
-                        logger.info("✓ Autonomous Life DISABLED")
-                    else:
-                        logger.warning(f"⚠ Autonomous Life still: {new_state}")
-                else:
-                    logger.info("✓ Autonomous Life already disabled")
+                    logger.info("✓ Autonomous Life disabled")
+                
+                # Disable basic awareness (prevents random head movements)
+                if self.awareness.isEnabled():
+                    self.awareness.stopAwareness()
+                    logger.info("✓ Basic Awareness disabled")
                     
             except Exception as e:
-                logger.warning(f"Could not control Autonomous Life: {e}")
-                logger.warning("Movement may be limited by autonomous behaviors")
+                logger.warning(f"Could not fully disable autonomous behaviors: {e}")
                 
         except qi.Exception as e:
             logger.error(f"Failed to initialize services: {e}")
             raise
     
     def _configure_motion(self):
-        """Configure motion service for optimal base movement."""
+        """
+        Configure motion service for optimal base movement.
+        BALANCED approach - not too restrictive, not too permissive.
+        """
         logger.info("Configuring motion settings...")
         
         try:
-            # Disable arm movements during base motion (prevents interference)
+            # ===== ARM MOVEMENT DURING BASE MOTION =====
+            # Disable arm sway (prevents interference with base movement)
             self.motion.setMoveArmsEnabled(False, False)
             logger.info("✓ Disabled arm sway during movement")
             
-            # Set motion configuration
-            # Disable foot contact protection (can block movement)
-            self.motion.setMotionConfig([["ENABLE_FOOT_CONTACT_PROTECTION", False]])
-            logger.info("✓ Configured motion parameters")
-            
-            # Set external collision protection to low (less restrictive)
+            # ===== COLLISION PROTECTION =====
+            # IMPORTANT: Keep collision protection ENABLED but set to permissive mode
+            # Don't disable completely - this is dangerous!
             try:
-                self.motion.setExternalCollisionProtectionEnabled("All", False)
-                logger.info("✓ Reduced collision protection")
-            except:
-                logger.warning("Could not disable collision protection")
+                # Set collision protection to "Move" mode (less restrictive)
+                self.motion.setExternalCollisionProtectionEnabled("Move", True)
+                logger.info("✓ Collision protection: MOVE mode (permissive)")
+            except Exception as e:
+                logger.warning(f"Could not set collision protection mode: {e}")
+                # Fallback: just reduce sensitivity
+                try:
+                    self.motion.setCollisionProtectionEnabled("Arms", False)
+                    logger.info("✓ Arm collision protection reduced")
+                except:
+                    pass
             
-            # Enable smart stiffness removal (saves battery when idle)
+            # ===== FOOT CONTACT PROTECTION =====
+            # Keep ENABLED for safety (prevents falling)
+            # Only disable if you have balance issues
             try:
-                self.motion.setSmartStiffnessEnabled(False)
-                logger.info("✓ Disabled smart stiffness (full control mode)")
+                self.motion.setMotionConfig([
+                    ["ENABLE_FOOT_CONTACT_PROTECTION", True],  # KEEP ENABLED
+                ])
+                logger.info("✓ Foot contact protection: ENABLED (safe)")
+            except Exception as e:
+                logger.warning(f"Motion config warning: {e}")
+            
+            # ===== SMART STIFFNESS =====
+            # ENABLE smart stiffness for better movement
+            try:
+                self.motion.setSmartStiffnessEnabled(True)
+                logger.info("✓ Smart stiffness: ENABLED")
+            except Exception as e:
+                logger.warning(f"Smart stiffness warning: {e}")
+            
+            # ===== IDLE POSTURE MANAGEMENT =====
+            # Disable idle posture family (prevents random movements)
+            try:
+                self.motion.setIdlePostureEnabled("Body", False)
+                logger.info("✓ Idle posture disabled")
             except:
                 pass
+            
+            # ===== BREATHING =====
+            # Disable breathing (subtle chest movements can interfere)
+            try:
+                self.motion.setBreathEnabled("Body", False)
+                logger.info("✓ Breathing disabled")
+            except:
+                pass
+            
+            logger.info("✓ Motion configuration complete")
             
         except Exception as e:
             logger.error(f"Motion configuration error: {e}")
             logger.warning("Movement may be affected")
     
     def _initialize_robot(self):
-        """Set robot to ready state with stiffness and posture."""
+        """Set robot to ready state with proper stiffness and posture."""
         try:
             logger.info("Initializing robot...")
             
-            # Set stiffness to Body first
+            # ===== WAKE UP =====
+            # Ensure robot is awake
+            try:
+                self.motion.wakeUp()
+                time.sleep(1.0)
+                logger.info("✓ Robot awake")
+            except Exception as e:
+                logger.warning(f"Wake up warning: {e}")
+            
+            # ===== STIFFNESS =====
+            # Set full body stiffness gradually
             logger.info("Setting body stiffness...")
-            self.motion.setStiffnesses("Body", 1.0)
+            self.motion.setStiffnesses("Body", 0.0)  # Start at 0
+            time.sleep(0.2)
+            self.motion.setStiffnesses("Body", 0.5)  # Gradual increase
+            time.sleep(0.3)
+            self.motion.setStiffnesses("Body", 1.0)  # Full stiffness
             time.sleep(0.5)
             logger.info("✓ Body stiffness: 1.0")
             
-            # CRITICAL: Explicitly enable wheel motors
-            logger.info("Enabling wheel motors...")
-            try:
-                # Pepper's wheel joint names
-                wheel_joints = ["WheelFL", "WheelFR", "WheelB"]
-                self.motion.setStiffnesses(wheel_joints, 1.0)
-                logger.info("✓ Wheel motors explicitly enabled")
-            except Exception as e:
-                logger.warning(f"Could not explicitly enable wheels: {e}")
-                logger.warning("Using default body stiffness for wheels")
-            
+            # ===== POSTURE =====
             # Go to Stand posture
             logger.info("Moving to Stand posture...")
-            self.posture.goToPosture("Stand", 0.5)
+            self.posture.goToPosture("Stand", 0.6)  # 60% speed
+            time.sleep(0.5)
             logger.info("✓ Robot in Stand posture")
             
-            # Test base movement capability
-            logger.info("Testing base movement capability...")
+            # ===== MOVEMENT TEST =====
+            # Small movement test to verify
+            logger.info("Testing base movement...")
             try:
-                # Small test movement
-                self.motion.moveToward(0.1, 0.0, 0.0)
-                time.sleep(0.2)
+                self.motion.moveToward(0.05, 0.0, 0.0)  # Tiny forward
+                time.sleep(0.5)
                 self.motion.stopMove()
                 logger.info("✓ Base movement test PASSED")
             except Exception as e:
                 logger.error(f"⚠ Base movement test FAILED: {e}")
-                logger.error("Base movement may not work correctly!")
             
-            logger.info("🤖 Robot ready for keyboard control")
+            logger.info("🤖 Robot ready for control")
             
         except Exception as e:
             logger.error(f"Failed to initialize robot state: {e}")
@@ -171,12 +205,12 @@ class PepperConnection:
             battery_level = self.battery.getBatteryCharge()
             stiffness = self.motion.getStiffnesses("Body")
             
-            # Check if base is moveable
+            # Check if wheels are moveable
             try:
                 wheel_stiffness = self.motion.getStiffnesses(["WheelFL", "WheelFR", "WheelB"])
                 wheels_enabled = all(s > 0.5 for s in wheel_stiffness)
             except:
-                wheels_enabled = True  # Assume enabled if can't check
+                wheels_enabled = True
             
             return {
                 "battery": battery_level,
@@ -189,84 +223,30 @@ class PepperConnection:
             return {"connected": False}
     
     def emergency_stop(self):
-        """Emergency stop - halt all movement and disable stiffness."""
+        """Emergency stop - halt all movement."""
         logger.error("🚨 EMERGENCY STOP")
         try:
-            # Stop base movement
             self.motion.stopMove()
-            
-            # Stop all other movements
             self.motion.killAll()
-            
-            # Optionally disable stiffness (commented out - keeps robot standing)
-            # self.motion.setStiffnesses("Body", 0.0)
-            
             logger.info("✓ Robot stopped")
         except Exception as e:
             logger.error(f"Error during emergency stop: {e}")
     
-    def test_movement(self):
-        """
-        Diagnostic test for base movement.
-        Call this if movement isn't working.
-        """
-        logger.info("\n" + "="*60)
-        logger.info("MOVEMENT DIAGNOSTIC TEST")
-        logger.info("="*60)
-        
+    def rest(self):
+        """Put robot in rest mode (low stiffness)."""
         try:
-            # Test 1: Check stiffness
-            logger.info("Test 1: Checking stiffness...")
-            body_stiff = self.motion.getStiffnesses("Body")
-            logger.info(f"  Body stiffness: {body_stiff[0]:.2f}")
-            
-            try:
-                wheel_stiff = self.motion.getStiffnesses(["WheelFL", "WheelFR", "WheelB"])
-                logger.info(f"  Wheel stiffness: FL={wheel_stiff[0]:.2f}, FR={wheel_stiff[1]:.2f}, B={wheel_stiff[2]:.2f}")
-            except:
-                logger.warning("  Could not check wheel stiffness")
-            
-            # Test 2: Check Autonomous Life
-            logger.info("\nTest 2: Checking Autonomous Life...")
-            if self.autonomous_life:
-                state = self.autonomous_life.getState()
-                logger.info(f"  State: {state}")
-                if state != "disabled":
-                    logger.warning("  ⚠ Autonomous Life NOT disabled!")
-            
-            # Test 3: Movement test
-            logger.info("\nTest 3: Testing forward movement (2 seconds)...")
-            logger.info("  Robot should move forward slowly...")
-            self.motion.moveToward(0.2, 0.0, 0.0)
-            time.sleep(2.0)
-            self.motion.stopMove()
-            logger.info("  ✓ Forward movement command sent")
-            
-            # Test 4: Rotation test
-            logger.info("\nTest 4: Testing rotation (2 seconds)...")
-            logger.info("  Robot should rotate left...")
-            self.motion.moveToward(0.0, 0.0, 0.3)
-            time.sleep(2.0)
-            self.motion.stopMove()
-            logger.info("  ✓ Rotation command sent")
-            
-            logger.info("\n" + "="*60)
-            logger.info("DIAGNOSTIC TEST COMPLETE")
-            logger.info("If robot didn't move, check:")
-            logger.info("  1. Battery level (needs >30%)")
-            logger.info("  2. Robot is in Stand posture")
-            logger.info("  3. Wheels are not blocked")
-            logger.info("  4. Floor is suitable (not carpet)")
-            logger.info("="*60 + "\n")
-            
+            logger.info("Putting robot to rest...")
+            self.motion.rest()
+            logger.info("✓ Robot at rest")
         except Exception as e:
-            logger.error(f"Diagnostic test failed: {e}")
+            logger.error(f"Rest error: {e}")
     
     def close(self):
         """Safely close the connection."""
         logger.info("Closing connection to Pepper...")
         try:
-            self.emergency_stop()
+            self.motion.stopMove()
+            # Don't rest automatically - let user decide
             if self.session:
                 self.session.close()
         except Exception as e:
