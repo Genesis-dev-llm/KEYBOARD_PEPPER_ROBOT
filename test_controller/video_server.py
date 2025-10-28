@@ -1,9 +1,6 @@
 """
-Video Streaming Server - Phase 2
+Video Streaming Server - FIXED VERSION
 Serves camera feeds (Pepper + HoverCam) over HTTP using Flask.
-Pepper's tablet can display these streams.
-
-FIXED: Removed duplicate function definition and syntax error
 """
 
 import logging
@@ -18,10 +15,7 @@ from flask_cors import CORS
 logger = logging.getLogger(__name__)
 
 class VideoStreamingServer:
-    """
-    HTTP server that streams camera feeds.
-    Runs in background thread, serves at http://0.0.0.0:8080
-    """
+    """HTTP server that streams camera feeds."""
     
     def __init__(self, pepper_session, hovercam_id=0):
         self.session = pepper_session
@@ -36,13 +30,13 @@ class VideoStreamingServer:
         
         # Flask app
         self.app = Flask(__name__)
-        CORS(self.app)  # Allow cross-origin requests
+        CORS(self.app)
         
         # Server control
         self.is_running = False
         self.server_thread = None
         
-        # Frame buffers (latest frames)
+        # Frame buffers
         self._pepper_frame = None
         self._hover_frame = None
         self._frame_lock = threading.Lock()
@@ -86,11 +80,10 @@ class VideoStreamingServer:
             logger.error(f"Camera initialization error: {e}")
     
     def _setup_routes(self):
-        """Setup Flask routes."""
+        """Setup Flask routes - FIXED duplicate route."""
         
         @self.app.route('/health')
         def health():
-            """Health check endpoint."""
             return jsonify({
                 'status': 'ok',
                 'pepper_camera': self.subscriber_id is not None,
@@ -99,7 +92,6 @@ class VideoStreamingServer:
         
         @self.app.route('/pepper_feed')
         def pepper_feed():
-            """Stream Pepper's camera feed (MJPEG)."""
             return Response(
                 self._generate_pepper_stream(),
                 mimetype='multipart/x-mixed-replace; boundary=frame'
@@ -107,7 +99,6 @@ class VideoStreamingServer:
         
         @self.app.route('/hover_feed')
         def hover_feed():
-            """Stream HoverCam feed (MJPEG)."""
             return Response(
                 self._generate_hover_stream(),
                 mimetype='multipart/x-mixed-replace; boundary=frame'
@@ -115,7 +106,6 @@ class VideoStreamingServer:
         
         @self.app.route('/pepper_snapshot')
         def pepper_snapshot():
-            """Get single frame from Pepper's camera."""
             with self._frame_lock:
                 if self._pepper_frame is not None:
                     _, buffer = cv2.imencode('.jpg', self._pepper_frame)
@@ -124,33 +114,31 @@ class VideoStreamingServer:
         
         @self.app.route('/hover_snapshot')
         def hover_snapshot():
-            """Get single frame from HoverCam."""
             with self._frame_lock:
                 if self._hover_frame is not None:
                     _, buffer = cv2.imencode('.jpg', self._hover_frame)
                     return Response(buffer.tobytes(), mimetype='image/jpeg')
             return "No frame available", 404
         
+        # FIXED: Single route for preset images
         @self.app.route('/image/<path:filename>')
-        def serve_preset_image(filename):
-            """Serve preset tablet images."""
+        def serve_image(filename):
+            """Serve tablet images (preset or custom)."""
+            # Try preset directory first
             preset_dir = "assets/tablet_images"
             filepath = os.path.join(preset_dir, filename)
             
             if os.path.exists(filepath):
-                # Determine mimetype
-                if filename.endswith('.png'):
-                    mimetype = 'image/png'
-                elif filename.endswith(('.jpg', '.jpeg')):
-                    mimetype = 'image/jpeg'
-                elif filename.endswith('.gif'):
-                    mimetype = 'image/gif'
-                else:
-                    mimetype = 'application/octet-stream'
-                
-                return send_file(filepath, mimetype=mimetype)
-            else:
-                return "Image not found", 404
+                return send_file(filepath, mimetype=self._get_mimetype(filename))
+            
+            # Try custom directory
+            custom_dir = "assets/tablet_images/custom"
+            filepath = os.path.join(custom_dir, filename)
+            
+            if os.path.exists(filepath):
+                return send_file(filepath, mimetype=self._get_mimetype(filename))
+            
+            return "Image not found", 404
         
         @self.app.route('/custom_image/<path:filename>')
         def serve_custom_image(filename):
@@ -159,26 +147,26 @@ class VideoStreamingServer:
             filepath = os.path.join(custom_dir, filename)
             
             if os.path.exists(filepath):
-                # Determine mimetype
-                if filename.endswith('.png'):
-                    mimetype = 'image/png'
-                elif filename.endswith(('.jpg', '.jpeg')):
-                    mimetype = 'image/jpeg'
-                elif filename.endswith('.gif'):
-                    mimetype = 'image/gif'
-                else:
-                    mimetype = 'application/octet-stream'
-                
-                return send_file(filepath, mimetype=mimetype)
-            else:
-                return "Image not found", 404
+                return send_file(filepath, mimetype=self._get_mimetype(filename))
+            
+            return "Image not found", 404
+    
+    def _get_mimetype(self, filename):
+        """Get MIME type from filename."""
+        if filename.endswith('.png'):
+            return 'image/png'
+        elif filename.endswith(('.jpg', '.jpeg')):
+            return 'image/jpeg'
+        elif filename.endswith('.gif'):
+            return 'image/gif'
+        else:
+            return 'application/octet-stream'
     
     def _generate_pepper_stream(self):
         """Generate MJPEG stream from Pepper's camera."""
         while self.is_running:
             try:
                 if self.video_device and self.subscriber_id:
-                    # Get frame from Pepper
                     img_data = self.video_device.getImageRemote(self.subscriber_id)
                     
                     if img_data:
@@ -197,7 +185,6 @@ class VideoStreamingServer:
                         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                         frame_bytes = buffer.tobytes()
                         
-                        # Yield as MJPEG frame
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
                 
@@ -215,15 +202,12 @@ class VideoStreamingServer:
                     ret, frame = self.hovercam.read()
                     
                     if ret:
-                        # Store latest frame
                         with self._frame_lock:
                             self._hover_frame = frame.copy()
                         
-                        # Encode as JPEG
                         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                         frame_bytes = buffer.tobytes()
                         
-                        # Yield as MJPEG frame
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
                 
@@ -244,10 +228,8 @@ class VideoStreamingServer:
         def run_server():
             try:
                 logger.info(f"🎥 Starting video server on http://{host}:{port}")
-                logger.info(f"   Pepper feed: http://{host}:{port}/pepper_feed")
-                logger.info(f"   HoverCam feed: http://{host}:{port}/hover_feed")
                 
-                # Run Flask (suppress default logging)
+                # Suppress Flask logging
                 import logging as flask_logging
                 flask_log = flask_logging.getLogger('werkzeug')
                 flask_log.setLevel(flask_logging.ERROR)
@@ -261,7 +243,6 @@ class VideoStreamingServer:
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
         
-        # Wait a bit for server to start
         time.sleep(2)
         logger.info("✓ Video streaming server ready")
     
@@ -270,7 +251,6 @@ class VideoStreamingServer:
         logger.info("Stopping video server...")
         self.is_running = False
         
-        # Cleanup cameras
         if self.subscriber_id and self.video_device:
             try:
                 self.video_device.unsubscribe(self.subscriber_id)
@@ -286,11 +266,9 @@ class VideoStreamingServer:
         logger.info("✓ Video server stopped")
     
     def get_pepper_url(self, host_ip):
-        """Get Pepper camera feed URL (for tablet display)."""
         return f"http://{host_ip}:8080/pepper_feed"
     
     def get_hover_url(self, host_ip):
-        """Get HoverCam feed URL (for tablet display)."""
         return f"http://{host_ip}:8080/hover_feed"
 
 
