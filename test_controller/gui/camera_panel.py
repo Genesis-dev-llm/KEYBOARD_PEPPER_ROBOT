@@ -1,287 +1,518 @@
 """
-Camera Panel - Display video feeds
-Shows Pepper's camera and HoverCam (USB) feeds.
+MODULE: test_controller/gui/control_panel.py
+Control Panel - IMPROVED VERSION
+
+IMPROVEMENTS:
+- Better button states (pressed/released visual feedback)
+- Hold-to-move for arrow buttons
+- Instant response
+- Better status messages
+- Cleaned up placeholders
 """
 
-import os
 import logging
-import datetime
+import threading
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QGroupBox, QFrame, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QPushButton, QLabel, QSlider, QGroupBox, QRadioButton,
+    QButtonGroup, QScrollArea, QMessageBox, QProgressBar
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap
-import cv2
-import numpy as np
-
-from .file_handler import FileDropPanel
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
 logger = logging.getLogger(__name__)
 
-class CameraPanel(QWidget):
-    """Panel for displaying camera feeds."""
+class ControlPanel(QWidget):
+    """Panel for robot control buttons and settings - IMPROVED."""
     
-    def __init__(self, session, robot_ip, tablet_ctrl):
+    # Signals
+    emergency_stop_signal = pyqtSignal()
+    status_update_signal = pyqtSignal(str)
+    
+    def __init__(self, controllers, dances, tablet_ctrl, pepper_conn):
         super().__init__()
         
-        self.session = session
-        self.robot_ip = robot_ip
+        self.controllers = controllers
+        self.dances = dances
         self.tablet = tablet_ctrl
+        self.pepper = pepper_conn
         
-        # Camera captures
-        self.pepper_video = None
-        self.hovercam = None
-        self.pepper_subscriber_id = None
+        # Movement button tracking (for hold-to-move)
+        self._movement_active = {
+            'forward': False,
+            'back': False,
+            'left': False,
+            'right': False,
+            'rotate_left': False,
+            'rotate_right': False
+        }
         
-        # Update timer
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._update_frames)
+        # Movement update timer (for hold-to-move)
+        self._movement_timer = QTimer()
+        self._movement_timer.timeout.connect(self._update_held_movement)
+        self._movement_timer.start(50)  # 20Hz
         
         self._init_ui()
-        self._init_cameras()
     
     def _init_ui(self):
         """Initialize the UI."""
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        # Make panel scrollable
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
         
-        # === PEPPER'S CAMERA ===
-        pepper_group = QGroupBox("📹 Pepper's Camera")
-        pepper_layout = QVBoxLayout()
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(15)
         
-        self.pepper_label = QLabel()
-        self.pepper_label.setObjectName("videoLabel")
-        self.pepper_label.setMinimumSize(400, 300)
-        self.pepper_label.setAlignment(Qt.AlignCenter)
-        self.pepper_label.setText("Initializing Pepper's camera...")
-        self.pepper_label.setStyleSheet("color: #8e8e8e;")
+        # === STATUS DISPLAY ===
+        layout.addWidget(self._create_status_display())
         
-        pepper_layout.addWidget(self.pepper_label)
-        pepper_group.setLayout(pepper_layout)
-        layout.addWidget(pepper_group)
+        # === MOVEMENT CONTROLS ===
+        layout.addWidget(self._create_movement_group())
         
-        # === HOVERCAM ===
-        hover_group = QGroupBox("📷 HoverCam (External)")
-        hover_layout = QVBoxLayout()
+        # === DANCE CONTROLS ===
+        layout.addWidget(self._create_dance_group())
         
-        self.hover_label = QLabel()
-        self.hover_label.setObjectName("videoLabel")
-        self.hover_label.setMinimumSize(400, 300)
-        self.hover_label.setAlignment(Qt.AlignCenter)
-        self.hover_label.setText("Initializing HoverCam...")
-        self.hover_label.setStyleSheet("color: #8e8e8e;")
+        # === TABLET MODE ===
+        layout.addWidget(self._create_tablet_group())
         
-        hover_layout.addWidget(self.hover_label)
-        hover_group.setLayout(hover_layout)
-        layout.addWidget(hover_group)
-        
-        # === CONTROL BUTTONS ===
-        button_layout = QHBoxLayout()
-        
-        self.switch_button = QPushButton("📷 Switch to Tablet")
-        self.switch_button.setToolTip("Send HoverCam feed to Pepper's tablet")
-        self.switch_button.clicked.connect(self._switch_camera_source)
-        
-        self.snapshot_button = QPushButton("📸 Snapshot")
-        self.snapshot_button.setToolTip("Save current frame")
-        self.snapshot_button.clicked.connect(self._take_snapshot)
-        
-        button_layout.addWidget(self.switch_button)
-        button_layout.addWidget(self.snapshot_button)
-        
-        layout.addLayout(button_layout)
-        
-        # Status label
-        self.status_label = QLabel("Status: Initializing...")
-        self.status_label.setStyleSheet("color: #8e8e8e; font-size: 11px;")
-        layout.addWidget(self.status_label)
-        
-        # === DRAG & DROP ZONE ===
-        drop_group = QGroupBox("📄 Tablet Display - Drag & Drop")
-        drop_layout = QVBoxLayout()
-        
-        self.file_drop_panel = FileDropPanel(self.tablet, self.session)
-        self.file_drop_panel.file_displayed.connect(self._on_file_displayed)
-        
-        drop_layout.addWidget(self.file_drop_panel)
-        drop_group.setLayout(drop_layout)
-        layout.addWidget(drop_group)
+        # === EMERGENCY STOP ===
+        layout.addWidget(self._create_emergency_button())
         
         layout.addStretch()
-    
-    def _init_cameras(self):
-        """Initialize camera connections."""
-        try:
-            # Initialize Pepper's camera
-            self.pepper_video = self.session.service("ALVideoDevice")
-            self.pepper_subscriber_id = self.pepper_video.subscribeCamera(
-                "gui_feed", 0, 2, 11, 15  # Top camera, 640x480, RGB, 15fps
-            )
-            self.status_label.setText("Status: ✓ Pepper's camera connected")
-            
-            # Initialize HoverCam (USB camera)
-            self._detect_hovercam()
-            
-            # Start update timer
-            self.timer.start(33)  # ~30 FPS
-            
-        except Exception as e:
-            self.status_label.setText(f"Status: ⚠ Camera init error: {e}")
-            print(f"Camera initialization error: {e}")
-    
-    def _detect_hovercam(self):
-        """Detect and connect to HoverCam."""
-        # Try common camera indices
-        for cam_id in range(5):
-            try:
-                cap = cv2.VideoCapture(cam_id)
-                if cap.isOpened():
-                    # Test read
-                    ret, frame = cap.read()
-                    if ret:
-                        self.hovercam = cap
-                        self.status_label.setText(f"Status: ✓ HoverCam found (device {cam_id})")
-                        print(f"✓ HoverCam detected on device {cam_id}")
-                        return
-                    else:
-                        cap.release()
-            except:
-                continue
         
-        self.hover_label.setText("HoverCam not detected\n\nPlug in USB camera and restart")
-        print("⚠ HoverCam not detected")
-    
-    def _update_frames(self):
-        """Update video frames."""
-        # Update Pepper's camera
-        if self.pepper_video and self.pepper_subscriber_id:
-            try:
-                img_data = self.pepper_video.getImageRemote(self.pepper_subscriber_id)
-                if img_data:
-                    width, height, image_bytes = img_data[0], img_data[1], img_data[6]
-                    frame = np.frombuffer(image_bytes, dtype=np.uint8).reshape((height, width, 3))
-                    self._display_frame(frame, self.pepper_label)
-            except Exception as e:
-                print(f"Error getting Pepper frame: {e}")
+        scroll.setWidget(container)
         
-        # Update HoverCam
-        if self.hovercam and self.hovercam.isOpened():
-            ret, frame = self.hovercam.read()
-            if ret:
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self._display_frame(frame_rgb, self.hover_label)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll)
     
-    def _display_frame(self, frame, label):
-        """Display a frame in a QLabel."""
-        try:
-            height, width, channel = frame.shape
-            bytes_per_line = 3 * width
-            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-            
-            # Scale to fit label while maintaining aspect ratio
-            pixmap = QPixmap.fromImage(q_image)
-            scaled_pixmap = pixmap.scaled(
-                label.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-            label.setPixmap(scaled_pixmap)
-        except Exception as e:
-            print(f"Error displaying frame: {e}")
-    
-    def _switch_camera_source(self):
-        """Switch which camera feed goes to tablet."""
-        # Toggle between Pepper's camera and HoverCam on tablet
-        if not hasattr(self, 'showing_hover_on_tablet'):
-            self.showing_hover_on_tablet = False
+    def _create_status_display(self):
+        """Create status display at top."""
+        group = QGroupBox("📊 Robot Status")
+        layout = QVBoxLayout()
         
-        self.showing_hover_on_tablet = not self.showing_hover_on_tablet
+        # Battery progress bar
+        battery_layout = QHBoxLayout()
+        battery_layout.addWidget(QLabel("Battery:"))
         
-        try:
-            if self.showing_hover_on_tablet:
-                # Show HoverCam on tablet (via tablet controller)
-                self.tablet.current_mode = self.tablet.current_mode  # Keep current mode
-                self.tablet.refresh_display()
-                
-                self.switch_button.setText("📷 Show Pepper Cam")
-                self.status_label.setText("Status: Tablet showing HoverCam (feature in development)")
-                logger.info("Switched tablet to HoverCam view")
-            else:
-                # Show Pepper's camera on tablet
-                self.tablet.refresh_display()
-                
-                self.switch_button.setText("📷 Switch to Tablet")
-                self.status_label.setText("Status: Tablet showing Pepper's camera")
-                logger.info("Switched tablet to Pepper's camera")
-        except Exception as e:
-            logger.error(f"Camera switch error: {e}")
-            self.status_label.setText(f"✗ Switch failed: {e}")
+        self.battery_bar = QProgressBar()
+        self.battery_bar.setRange(0, 100)
+        self.battery_bar.setValue(50)
+        self.battery_bar.setTextVisible(True)
+        self.battery_bar.setFormat("%p%")
+        battery_layout.addWidget(self.battery_bar)
+        
+        layout.addLayout(battery_layout)
+        
+        # Current action label
+        self.action_label = QLabel("Ready - Waiting for input")
+        self.action_label.setAlignment(Qt.AlignCenter)
+        self.action_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                background: #2d2d30;
+                border-radius: 5px;
+                color: #4ade80;
+            }
+        """)
+        layout.addWidget(self.action_label)
+        
+        # Speed indicator
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("Speed:"))
+        self.speed_label = QLabel("0.4 m/s")
+        self.speed_label.setStyleSheet("font-weight: bold;")
+        speed_layout.addWidget(self.speed_label)
+        speed_layout.addStretch()
+        layout.addLayout(speed_layout)
+        
+        group.setLayout(layout)
+        return group
     
-    def _take_snapshot(self):
-        """Save current frame as image."""
-        try:
-            from PIL import Image
-        except ImportError:
-            self.status_label.setText("✗ PIL not installed (pip install Pillow)")
-            logger.error("Pillow not installed")
+    def _create_movement_group(self):
+        """Create movement control group - IMPROVED with hold-to-move."""
+        group = QGroupBox("🎮 Movement Controls")
+        layout = QVBoxLayout()
+        
+        # Instructions
+        instructions = QLabel("Hold buttons to move continuously")
+        instructions.setStyleSheet("color: #8e8e8e; font-size: 11px; font-style: italic;")
+        layout.addWidget(instructions)
+        
+        # Arrow pad with hold-to-move
+        arrow_layout = QGridLayout()
+        
+        # Forward button
+        self.up_btn = QPushButton("↑")
+        self.up_btn.setFixedSize(60, 50)
+        self.up_btn.setToolTip("Move Forward (Hold)")
+        self.up_btn.pressed.connect(lambda: self._start_movement('forward'))
+        self.up_btn.released.connect(lambda: self._stop_movement('forward'))
+        
+        # Back button
+        self.down_btn = QPushButton("↓")
+        self.down_btn.setFixedSize(60, 50)
+        self.down_btn.setToolTip("Move Backward (Hold)")
+        self.down_btn.pressed.connect(lambda: self._start_movement('back'))
+        self.down_btn.released.connect(lambda: self._stop_movement('back'))
+        
+        # Left button
+        self.left_btn = QPushButton("←")
+        self.left_btn.setFixedSize(60, 50)
+        self.left_btn.setToolTip("Strafe Left (Hold)")
+        self.left_btn.pressed.connect(lambda: self._start_movement('left'))
+        self.left_btn.released.connect(lambda: self._stop_movement('left'))
+        
+        # Right button
+        self.right_btn = QPushButton("→")
+        self.right_btn.setFixedSize(60, 50)
+        self.right_btn.setToolTip("Strafe Right (Hold)")
+        self.right_btn.pressed.connect(lambda: self._start_movement('right'))
+        self.right_btn.released.connect(lambda: self._stop_movement('right'))
+        
+        # Center stop button
+        stop_btn = QPushButton("⏹")
+        stop_btn.setFixedSize(60, 50)
+        stop_btn.setToolTip("STOP (Space)")
+        stop_btn.clicked.connect(self._stop_all_movement)
+        stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c42b1c;
+                font-size: 24px;
+            }
+            QPushButton:hover {
+                background-color: #e81123;
+            }
+        """)
+        
+        arrow_layout.addWidget(self.up_btn, 0, 1)
+        arrow_layout.addWidget(self.left_btn, 1, 0)
+        arrow_layout.addWidget(stop_btn, 1, 1)
+        arrow_layout.addWidget(self.right_btn, 1, 2)
+        arrow_layout.addWidget(self.down_btn, 2, 1)
+        
+        layout.addLayout(arrow_layout)
+        
+        # Rotation buttons
+        rotate_layout = QHBoxLayout()
+        
+        self.rotate_left_btn = QPushButton("↶ Rotate L")
+        self.rotate_left_btn.setToolTip("Rotate Left (Hold)")
+        self.rotate_left_btn.pressed.connect(lambda: self._start_movement('rotate_left'))
+        self.rotate_left_btn.released.connect(lambda: self._stop_movement('rotate_left'))
+        
+        self.rotate_right_btn = QPushButton("Rotate R ↷")
+        self.rotate_right_btn.setToolTip("Rotate Right (Hold)")
+        self.rotate_right_btn.pressed.connect(lambda: self._start_movement('rotate_right'))
+        self.rotate_right_btn.released.connect(lambda: self._stop_movement('rotate_right'))
+        
+        rotate_layout.addWidget(self.rotate_left_btn)
+        rotate_layout.addWidget(self.rotate_right_btn)
+        
+        layout.addLayout(rotate_layout)
+        
+        # Speed control
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("Speed:"))
+        
+        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setMinimum(10)
+        self.speed_slider.setMaximum(100)
+        self.speed_slider.setValue(40)
+        self.speed_slider.setToolTip("Adjust movement speed")
+        self.speed_slider.valueChanged.connect(self._update_speed)
+        
+        self.speed_value_label = QLabel("0.4")
+        self.speed_value_label.setMinimumWidth(40)
+        self.speed_value_label.setStyleSheet("font-weight: bold;")
+        
+        speed_layout.addWidget(self.speed_slider)
+        speed_layout.addWidget(self.speed_value_label)
+        
+        layout.addLayout(speed_layout)
+        
+        # Quick buttons
+        quick_layout = QHBoxLayout()
+        
+        turbo_btn = QPushButton("🚀 Turbo")
+        turbo_btn.setCheckable(True)
+        turbo_btn.setToolTip("Toggle turbo mode (1.5x speed)")
+        turbo_btn.toggled.connect(self._toggle_turbo)
+        
+        reset_btn = QPushButton("🔄 Reset Position")
+        reset_btn.setToolTip("Reset accumulated position to origin")
+        reset_btn.clicked.connect(self._reset_position)
+        
+        quick_layout.addWidget(turbo_btn)
+        quick_layout.addWidget(reset_btn)
+        
+        layout.addLayout(quick_layout)
+        
+        group.setLayout(layout)
+        return group
+    
+    def _create_dance_group(self):
+        """Create dance control group."""
+        group = QGroupBox("💃 Dance Animations")
+        layout = QGridLayout()
+        
+        dances = [
+            ("👋\nWave", "wave", "Simple friendly wave"),
+            ("💃\nSpecial", "special", "Energetic dance with squats"),
+            ("🤖\nRobot", "robot", "Mechanical choppy movements"),
+            ("🌙\nMoonwalk", "moonwalk", "Michael Jackson style")
+        ]
+        
+        for i, (text, dance_id, tooltip) in enumerate(dances):
+            btn = QPushButton(text)
+            btn.setObjectName("danceButton")
+            btn.setMinimumHeight(70)
+            btn.setToolTip(tooltip)
+            btn.clicked.connect(lambda checked, d=dance_id: self._trigger_dance(d))
+            layout.addWidget(btn, i // 2, i % 2)
+        
+        group.setLayout(layout)
+        return group
+    
+    def _create_tablet_group(self):
+        """Create tablet mode control group."""
+        group = QGroupBox("📱 Tablet Display")
+        layout = QVBoxLayout()
+        
+        self.tablet_buttons = QButtonGroup()
+        
+        modes = [
+            ("📊 Status", "status"),
+            ("📷 Pepper Camera", "camera_pepper"),
+            ("🎥 HoverCam", "camera_hover"),
+            ("👋 Greeting", "greeting")
+        ]
+        
+        for text, mode_id in modes:
+            radio = QRadioButton(text)
+            radio.toggled.connect(lambda checked, m=mode_id: self._change_tablet_mode(m) if checked else None)
+            self.tablet_buttons.addButton(radio)
+            layout.addWidget(radio)
+        
+        # Set default
+        self.tablet_buttons.buttons()[0].setChecked(True)
+        
+        group.setLayout(layout)
+        return group
+    
+    def _create_emergency_button(self):
+        """Create emergency stop button."""
+        btn = QPushButton("🚨 EMERGENCY STOP")
+        btn.setObjectName("emergencyButton")
+        btn.setMinimumHeight(70)
+        btn.clicked.connect(self.emergency_stop_signal.emit)
+        return btn
+    
+    # ========================================================================
+    # MOVEMENT METHODS - HOLD TO MOVE
+    # ========================================================================
+    
+    def _start_movement(self, direction):
+        """Start movement in direction (called when button pressed)."""
+        self._movement_active[direction] = True
+        self._update_button_state(direction, True)
+        self.action_label.setText(f"Moving: {direction.replace('_', ' ').title()}")
+        self.action_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                background: #2d2d30;
+                border-radius: 5px;
+                color: #fbbf24;
+            }
+        """)
+    
+    def _stop_movement(self, direction):
+        """Stop movement in direction (called when button released)."""
+        self._movement_active[direction] = False
+        self._update_button_state(direction, False)
+        
+        # If no movements active, stop
+        if not any(self._movement_active.values()):
+            base = self.controllers.get('base')
+            if base:
+                base.stop()
+            self.action_label.setText("Ready - Waiting for input")
+            self.action_label.setStyleSheet("""
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 10px;
+                    background: #2d2d30;
+                    border-radius: 5px;
+                    color: #4ade80;
+                }
+            """)
+    
+    def _update_held_movement(self):
+        """Update movement for held buttons (called by timer at 20Hz)."""
+        base = self.controllers.get('base')
+        if not base:
             return
         
-        # Create snapshots directory
-        snapshot_dir = os.path.expanduser("~/pepper_snapshots")
-        os.makedirs(snapshot_dir, exist_ok=True)
-        
-        # Get current frame from Pepper's camera
-        if self.pepper_video and self.pepper_subscriber_id:
-            try:
-                img_data = self.pepper_video.getImageRemote(self.pepper_subscriber_id)
-                if img_data:
-                    width, height, image_bytes = img_data[0], img_data[1], img_data[6]
-                    frame = np.frombuffer(image_bytes, dtype=np.uint8).reshape((height, width, 3))
-                    
-                    # Generate filename with timestamp
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"pepper_snapshot_{timestamp}.png"
-                    filepath = os.path.join(snapshot_dir, filename)
-                    
-                    # Save using PIL
-                    img = Image.fromarray(frame)
-                    img.save(filepath)
-                    
-                    self.status_label.setText(f"✓ Saved: {filename}")
-                    self.status_label.setStyleSheet("color: #4ade80; font-size: 11px;")
-                    logger.info(f"Snapshot saved: {filepath}")
-                    
-                    # Show notification
-                    QMessageBox.information(
-                        self,
-                        "Snapshot Saved",
-                        f"Image saved to:\n{filepath}"
-                    )
-                    return
-            except Exception as e:
-                logger.error(f"Snapshot error: {e}")
-        
-        self.status_label.setText("✗ Snapshot failed")
-        self.status_label.setStyleSheet("color: #f87171; font-size: 11px;")
-    
-    def _on_file_displayed(self, file_path, success):
-        """Handle file display result."""
-        if success:
-            self.status_label.setText(f"✓ File displayed on tablet")
+        # Set velocities based on active movements
+        if self._movement_active['forward']:
+            base.set_continuous_velocity('x', 1.0)
+        elif self._movement_active['back']:
+            base.set_continuous_velocity('x', -1.0)
         else:
-            self.status_label.setText(f"✗ Failed to display file")
+            base.set_continuous_velocity('x', 0.0)
+        
+        if self._movement_active['left']:
+            base.set_continuous_velocity('y', 1.0)
+        elif self._movement_active['right']:
+            base.set_continuous_velocity('y', -1.0)
+        else:
+            base.set_continuous_velocity('y', 0.0)
+        
+        if self._movement_active['rotate_left']:
+            base.set_continuous_velocity('theta', 1.0)
+        elif self._movement_active['rotate_right']:
+            base.set_continuous_velocity('theta', -1.0)
+        else:
+            base.set_continuous_velocity('theta', 0.0)
+        
+        # Update base movement
+        base.move_continuous()
+    
+    def _update_button_state(self, direction, pressed):
+        """Update button visual state."""
+        button_map = {
+            'forward': self.up_btn,
+            'back': self.down_btn,
+            'left': self.left_btn,
+            'right': self.right_btn,
+            'rotate_left': self.rotate_left_btn,
+            'rotate_right': self.rotate_right_btn
+        }
+        
+        btn = button_map.get(direction)
+        if btn:
+            if pressed:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1177bb;
+                        border: 2px solid #0e639c;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("")  # Reset to default
+    
+    def _stop_all_movement(self):
+        """Stop all movement immediately."""
+        # Reset all active flags
+        for key in self._movement_active:
+            self._movement_active[key] = False
+            self._update_button_state(key, False)
+        
+        # Stop base
+        base = self.controllers.get('base')
+        if base:
+            base.stop()
+        
+        self.action_label.setText("⏹ STOPPED")
+        self.action_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                background: #2d2d30;
+                border-radius: 5px;
+                color: #f87171;
+            }
+        """)
+        
+        # Reset to ready after 1 second
+        QTimer.singleShot(1000, lambda: self.action_label.setText("Ready - Waiting for input"))
+    
+    # ========================================================================
+    # OTHER METHODS
+    # ========================================================================
+    
+    def _update_speed(self, value):
+        """Update movement speed."""
+        speed = value / 100.0
+        self.speed_value_label.setText(f"{speed:.2f}")
+        self.speed_label.setText(f"{speed:.2f} m/s")
+        
+        base = self.controllers.get('base')
+        if base:
+            base.linear_speed = speed
+            base.angular_speed = speed * 1.5  # Angular a bit faster
+        
+        self.status_update_signal.emit(f"Speed: {speed:.2f} m/s")
+    
+    def _toggle_turbo(self, checked):
+        """Toggle turbo mode."""
+        base = self.controllers.get('base')
+        if base:
+            base.toggle_turbo()
+        
+        status = "ENABLED 🚀" if checked else "DISABLED"
+        self.status_update_signal.emit(f"Turbo mode: {status}")
+    
+    def _reset_position(self):
+        """Reset accumulated position."""
+        base = self.controllers.get('base')
+        if base:
+            base.reset_position()
+        self.status_update_signal.emit("Position reset to origin")
+    
+    def _trigger_dance(self, dance_id):
+        """Trigger a dance animation."""
+        self.status_update_signal.emit(f"Dance: {dance_id}")
+        self.action_label.setText(f"Dancing: {dance_id.title()}")
+        
+        # Execute dance in separate thread
+        thread = threading.Thread(target=self._execute_dance, args=(dance_id,))
+        thread.daemon = True
+        thread.start()
+    
+    def _execute_dance(self, dance_id):
+        """Execute dance (runs in thread)."""
+        try:
+            if dance_id in self.dances:
+                self.dances[dance_id].perform()
+                self.status_update_signal.emit(f"Dance complete: {dance_id}")
+        except Exception as e:
+            logger.error(f"Dance error: {e}")
+            self.status_update_signal.emit(f"Dance failed: {e}")
+    
+    def _change_tablet_mode(self, mode_id):
+        """Change tablet display mode."""
+        # Implementation depends on tablet controller
+        self.status_update_signal.emit(f"Tablet mode: {mode_id}")
+    
+    def update_battery(self, level):
+        """Update battery display."""
+        self.battery_bar.setValue(level)
+        
+        # Change color based on level
+        if level >= 60:
+            self.battery_bar.setObjectName("batteryGood")
+        elif level >= 30:
+            self.battery_bar.setObjectName("batteryMedium")
+        else:
+            self.battery_bar.setObjectName("batteryLow")
+        
+        self.battery_bar.style().unpolish(self.battery_bar)
+        self.battery_bar.style().polish(self.battery_bar)
     
     def cleanup(self):
-        """Cleanup camera resources."""
-        self.timer.stop()
+        """Cleanup resources."""
+        # Stop movement timer
+        self._movement_timer.stop()
         
-        if self.pepper_subscriber_id and self.pepper_video:
-            try:
-                self.pepper_video.unsubscribe(self.pepper_subscriber_id)
-            except:
-                pass
+        # Stop all movement
+        self._stop_all_movement()
         
-        if self.hovercam:
-            self.hovercam.release()
+        logger.info("✓ Control panel cleaned up")

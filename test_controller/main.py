@@ -1,11 +1,11 @@
 """
-Main Entry Point for Pepper Keyboard Test Controller
-Orchestrates all components and starts the controller.
+MODULE: test_controller/main.py
+Main Entry Point - GUI LAUNCHES BY DEFAULT
 
-PHASE 1 FIXES:
-- Fixed dances scope bug (moved before GUI check)
+CHANGES:
+- GUI is now default mode
+- Use --no-gui flag for keyboard-only mode
 - Better error handling
-- Proper cleanup on exit
 """
 
 import sys
@@ -33,20 +33,28 @@ def run():
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description="Pepper Robot Keyboard Test Controller",
+        description="Pepper Robot Control System (GUI by default)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python test_keyboard_control.py 192.168.1.100
-  python test_keyboard_control.py --gui
-  python -m test_controller.main --ip 192.168.1.100 --gui
+  python test_keyboard_control.py 192.168.1.100          (launches GUI)
+  python test_keyboard_control.py --ip 192.168.1.100     (launches GUI)
+  python test_keyboard_control.py 192.168.1.100 --no-gui (keyboard only)
+  python -m test_controller.main --ip 192.168.1.100      (launches GUI)
         """
+    )
+    
+    # GUI control - DEFAULT IS GUI MODE!
+    parser.add_argument(
+        '--no-gui',
+        action='store_true',
+        help="Run in keyboard-only mode (no GUI window)"
     )
     
     parser.add_argument(
         '--gui',
         action='store_true',
-        help="Launch with GUI interface (PyQt5)"
+        help="Launch with GUI (default, kept for compatibility)"
     )
     
     parser.add_argument(
@@ -64,6 +72,9 @@ Examples:
     )
     
     args = parser.parse_args()
+    
+    # Determine mode: GUI is default unless --no-gui is specified
+    use_gui = not args.no_gui
     
     # Get IP from either positional or flag argument
     pepper_ip = args.ip or args.ip_flag
@@ -84,7 +95,7 @@ Examples:
         print("="*60)
         print("Options:")
         print("  1. python test_keyboard_control.py 192.168.1.100")
-        print("  2. python test_keyboard_control.py 192.168.1.100 --gui")
+        print("  2. python test_keyboard_control.py 192.168.1.100 --no-gui")
         print("  3. python -m test_controller.main --ip 192.168.1.100")
         print("  4. Enter IP now:")
         print()
@@ -114,9 +125,10 @@ Examples:
     input_handler = None
     
     try:
+        mode_str = "GUI MODE" if use_gui else "KEYBOARD-ONLY MODE"
         print("\n" + "="*60)
-        print("  🤖 PEPPER KEYBOARD TEST CONTROLLER")
-        print("  Version 2.0.0 - Phase 1: Smooth Movement")
+        print(f"  🤖 PEPPER CONTROL SYSTEM - {mode_str}")
+        print("  Version 2.0.0 - Complete Edition")
         print("="*60 + "\n")
         
         # Connect to Pepper
@@ -133,7 +145,7 @@ Examples:
         logger.info("Initializing tablet display...")
         tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
         
-        # Initialize dances (MOVED BEFORE GUI CHECK - CRITICAL FIX!)
+        # Initialize dances
         logger.info("Loading dance animations...")
         dances = {
             'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
@@ -142,7 +154,7 @@ Examples:
             'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
         }
         
-        # Initialize video server (PHASE 2 - CRITICAL!)
+        # Initialize video server
         logger.info("Starting video streaming server...")
         from .video_server import create_video_server
         video_server = create_video_server(pepper_conn.session)
@@ -151,68 +163,73 @@ Examples:
         # Update tablet controller with video server
         tablet_ctrl.video_server = video_server
         
-        # Check if GUI mode requested
-        if args.gui:
+        # ====================================================================
+        # LAUNCH MODE: GUI or KEYBOARD
+        # ====================================================================
+        
+        if use_gui:
+            # GUI MODE (DEFAULT)
             logger.info("Launching GUI mode...")
             try:
                 from .gui import launch_gui
             except ImportError as e:
                 logger.error(f"Failed to import GUI: {e}")
                 logger.error("Install GUI dependencies: pip install -r requirements_gui.txt")
-                logger.error("Required: PyQt5, pyaudio, SpeechRecognition, Pillow")
-                sys.exit(1)
+                logger.error("Required: PyQt5, Pillow, opencv-python")
+                logger.info("\nFalling back to keyboard-only mode...")
+                use_gui = False
             
-            # Package controllers for GUI
-            controllers_dict = {
-                'base': base_ctrl,
-                'body': body_ctrl,
-                'video': video_ctrl
-            }
-            
-            # Launch GUI (blocking call)
-            exit_code = launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl)
-            sys.exit(exit_code)
+            if use_gui:
+                # Package controllers for GUI
+                controllers_dict = {
+                    'base': base_ctrl,
+                    'body': body_ctrl,
+                    'video': video_ctrl
+                }
+                
+                logger.info("✓ All systems ready!")
+                logger.info("✓ GUI window launching...\n")
+                
+                # Launch GUI (blocking call)
+                exit_code = launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl)
+                sys.exit(exit_code)
         
         # ====================================================================
-        # KEYBOARD MODE (non-GUI)
+        # KEYBOARD MODE (fallback or --no-gui)
         # ====================================================================
         
-        # Initialize input handler
-        logger.info("Initializing keyboard input handler...")
-        input_handler = InputHandler(
-            pepper_conn, base_ctrl, body_ctrl, 
-            video_ctrl, tablet_ctrl, dances
-        )
-        
-        # Start base movement update thread (for continuous mode)
-        # CRITICAL: Update at 50Hz for smooth base movement!
-        def base_update_loop():
-            """Update base movement continuously at 50Hz"""
-            while input_handler.running:
-                try:
-                    if input_handler.continuous_mode:
-                        base_ctrl.move_continuous()
-                    time.sleep(0.02)  # 20ms = 50Hz (increased from 50ms/20Hz)
-                except Exception as e:
-                    logger.error(f"Movement update error: {e}")
-                    time.sleep(0.1)
-        
-        base_thread = threading.Thread(target=base_update_loop, daemon=True)
-        base_thread.start()
-        
-        logger.info("✓ All systems ready!")
-        logger.info("✓ Keyboard control active")
-        logger.info("✓ Base movement: 50Hz update rate")
-        
-        # Optional: Run movement diagnostic
-        if '--test-movement' in sys.argv:
-            logger.info("\n🔧 Running movement diagnostic...")
-            pepper_conn.test_movement()
-        
-        print()
-        
-        # Run input handler (blocks until ESC pressed)
-        input_handler.run()
+        if not use_gui:
+            logger.info("Running in keyboard-only mode...")
+            
+            # Initialize input handler
+            logger.info("Initializing keyboard input handler...")
+            input_handler = InputHandler(
+                pepper_conn, base_ctrl, body_ctrl, 
+                video_ctrl, tablet_ctrl, dances
+            )
+            
+            # Start base movement update thread (for continuous mode)
+            def base_update_loop():
+                """Update base movement continuously at 50Hz"""
+                while input_handler.running:
+                    try:
+                        if input_handler.continuous_mode:
+                            base_ctrl.move_continuous()
+                        time.sleep(0.02)  # 50Hz
+                    except Exception as e:
+                        logger.error(f"Movement update error: {e}")
+                        time.sleep(0.1)
+            
+            base_thread = threading.Thread(target=base_update_loop, daemon=True)
+            base_thread.start()
+            
+            logger.info("✓ All systems ready!")
+            logger.info("✓ Keyboard control active")
+            logger.info("✓ Base movement: 50Hz update rate")
+            print()
+            
+            # Run input handler (blocks until ESC pressed)
+            input_handler.run()
         
     except KeyboardInterrupt:
         logger.info("\nInterrupted by user (Ctrl+C)")
