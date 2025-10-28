@@ -2,6 +2,8 @@
 Video Streaming Server - Phase 2
 Serves camera feeds (Pepper + HoverCam) over HTTP using Flask.
 Pepper's tablet can display these streams.
+
+FIXED: Removed duplicate function definition and syntax error
 """
 
 import logging
@@ -136,7 +138,17 @@ class VideoStreamingServer:
             filepath = os.path.join(preset_dir, filename)
             
             if os.path.exists(filepath):
-                return send_file(filepath, mimetype='image/png')
+                # Determine mimetype
+                if filename.endswith('.png'):
+                    mimetype = 'image/png'
+                elif filename.endswith(('.jpg', '.jpeg')):
+                    mimetype = 'image/jpeg'
+                elif filename.endswith('.gif'):
+                    mimetype = 'image/gif'
+                else:
+                    mimetype = 'application/octet-stream'
+                
+                return send_file(filepath, mimetype=mimetype)
             else:
                 return "Image not found", 404
         
@@ -160,13 +172,9 @@ class VideoStreamingServer:
                 return send_file(filepath, mimetype=mimetype)
             else:
                 return "Image not found", 404
-        
-        @self.app.route('/image/<path:filename>')
-        def serve_preset_image(filename):
-            """Serve preset tablet
     
     def _generate_pepper_stream(self):
-        Generate MJPEG stream from Pepper's camera."""
+        """Generate MJPEG stream from Pepper's camera."""
         while self.is_running:
             try:
                 if self.video_device and self.subscriber_id:
