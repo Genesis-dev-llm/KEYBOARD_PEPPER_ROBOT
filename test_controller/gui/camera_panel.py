@@ -285,7 +285,7 @@ class CameraPanel(QWidget):
     
     def _show_on_tablet(self, camera):
         """Display camera feed on Pepper's tablet."""
-        from .display_modes import DisplayMode
+        from ..tablet.display_modes import DisplayMode
         
         if camera == 'pepper':
             self.tablet.set_mode(DisplayMode.PEPPER_CAM)

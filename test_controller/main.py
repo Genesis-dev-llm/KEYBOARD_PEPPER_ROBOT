@@ -1,11 +1,12 @@
 """
-MODULE: test_controller/main.py
-Main Entry Point - GUI LAUNCHES BY DEFAULT
+Main Entry Point - ULTRA OPTIMIZED VERSION
+Minimal startup, fast execution, optional features.
 
-CHANGES:
-- GUI is now default mode
-- Use --no-gui flag for keyboard-only mode
-- Better error handling
+OPTIMIZATIONS:
+- Lazy loading (only load what's needed)
+- Optional video server
+- Fast keyboard mode by default
+- Minimal imports
 """
 
 import sys
@@ -15,258 +16,193 @@ import argparse
 import threading
 import time
 
-# Setup logging
+# Minimal logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Less spam!
     format='%(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Import controllers
-from .controllers import PepperConnection, BaseController, BodyController, VideoController
-from .dances import WaveDance, SpecialDance, RobotDance, MoonwalkDance
-from .input_handler import InputHandler
-from .tablet import TabletController
+# Set important loggers to INFO
+logging.getLogger('test_controller').setLevel(logging.INFO)
 
 def run():
-    """Main entry point for the test controller."""
+    """Main entry - OPTIMIZED."""
     
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description="Pepper Robot Control System (GUI by default)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python test_keyboard_control.py 192.168.1.100          (launches GUI)
-  python test_keyboard_control.py --ip 192.168.1.100     (launches GUI)
-  python test_keyboard_control.py 192.168.1.100 --no-gui (keyboard only)
-  python -m test_controller.main --ip 192.168.1.100      (launches GUI)
-        """
-    )
+    parser = argparse.ArgumentParser(description="Pepper Control - FAST MODE")
     
-    # GUI control - DEFAULT IS GUI MODE!
-    parser.add_argument(
-        '--no-gui',
-        action='store_true',
-        help="Run in keyboard-only mode (no GUI window)"
-    )
-    
-    parser.add_argument(
-        '--gui',
-        action='store_true',
-        help="Launch with GUI (default, kept for compatibility)"
-    )
-    
-    parser.add_argument(
-        'ip',
-        nargs='?',
-        type=str,
-        help="Pepper robot's IP address"
-    )
-    
-    parser.add_argument(
-        '--ip',
-        dest='ip_flag',
-        type=str,
-        help="Pepper robot's IP address (alternative)"
-    )
+    parser.add_argument('ip', nargs='?', help="Pepper's IP")
+    parser.add_argument('--ip', dest='ip_flag', help="Pepper's IP (alt)")
+    parser.add_argument('--no-gui', action='store_true', help="Keyboard only (FAST)")
+    parser.add_argument('--gui', action='store_true', help="Launch GUI (slower)")
+    parser.add_argument('--no-video', action='store_true', help="Disable video server")
+    parser.add_argument('--minimal', action='store_true', help="Absolute minimal mode")
     
     args = parser.parse_args()
     
-    # Determine mode: GUI is default unless --no-gui is specified
-    use_gui = not args.no_gui
+    # Determine mode
+    use_gui = args.gui and not args.no_gui
+    enable_video = not args.no_video and not args.minimal
+    minimal_mode = args.minimal
     
-    # Get IP from either positional or flag argument
+    # Get IP
     pepper_ip = args.ip or args.ip_flag
     
-    # Try to load from saved file if no IP provided
     if not pepper_ip and os.path.exists(".pepper_ip"):
         try:
             with open(".pepper_ip", "r") as f:
                 pepper_ip = f.read().strip()
-            logger.info(f"Using saved Pepper IP: {pepper_ip}")
         except:
             pass
     
-    # If still no IP, ask user
     if not pepper_ip:
-        print("\n" + "="*60)
-        print("  PEPPER IP ADDRESS REQUIRED")
-        print("="*60)
-        print("Options:")
-        print("  1. python test_keyboard_control.py 192.168.1.100")
-        print("  2. python test_keyboard_control.py 192.168.1.100 --no-gui")
-        print("  3. python -m test_controller.main --ip 192.168.1.100")
-        print("  4. Enter IP now:")
-        print()
-        pepper_ip = input("Enter Pepper's IP address: ").strip()
-        
+        pepper_ip = input("Enter Pepper's IP: ").strip()
         if not pepper_ip:
-            print("No IP provided. Exiting.")
+            print("No IP provided.")
             sys.exit(1)
         
-        # Save IP for next time
         try:
             with open(".pepper_ip", "w") as f:
                 f.write(pepper_ip)
-            logger.info(f"Saved IP to .pepper_ip")
         except:
             pass
     
     # ========================================================================
-    # INITIALIZE COMPONENTS
+    # FAST INITIALIZATION
     # ========================================================================
     
-    pepper_conn = None
-    base_ctrl = None
-    body_ctrl = None
-    video_ctrl = None
-    tablet_ctrl = None
-    input_handler = None
+    print("\n" + "="*60)
+    mode_desc = "MINIMAL" if minimal_mode else ("GUI" if use_gui else "KEYBOARD")
+    print(f"  🤖 PEPPER CONTROL - {mode_desc} MODE")
+    print("="*60 + "\n")
     
     try:
-        mode_str = "GUI MODE" if use_gui else "KEYBOARD-ONLY MODE"
-        print("\n" + "="*60)
-        print(f"  🤖 PEPPER CONTROL SYSTEM - {mode_str}")
-        print("  Version 2.0.0 - Complete Edition")
-        print("="*60 + "\n")
+        # Import only what we need
+        from .controllers import PepperConnection, BaseController, BodyController
         
-        # Connect to Pepper
-        logger.info("Initializing Pepper connection...")
+        # Connect
+        logger.info("Connecting to Pepper...")
         pepper_conn = PepperConnection(pepper_ip)
         
         # Initialize controllers
-        logger.info("Initializing movement controllers...")
+        logger.info("Initializing controllers...")
         base_ctrl = BaseController(pepper_conn.motion)
         body_ctrl = BodyController(pepper_conn.motion)
-        video_ctrl = VideoController(pepper_ip)
         
-        # Initialize tablet display
-        logger.info("Initializing tablet display...")
-        tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
+        # Optional: Video controller (only if needed)
+        video_ctrl = None
+        if not minimal_mode:
+            from .controllers import VideoController
+            video_ctrl = VideoController(pepper_ip)
         
-        # Initialize dances
-        logger.info("Loading dance animations...")
-        dances = {
-            'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
-            'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
-            'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
-            'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
-        }
+        # Optional: Tablet (only if needed)
+        tablet_ctrl = None
+        if not minimal_mode:
+            from .tablet import TabletController
+            tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
         
-        # Initialize video server
-        logger.info("Starting video streaming server...")
-        from .video_server import create_video_server
-        video_server = create_video_server(pepper_conn.session)
-        video_server.start()
+        # Optional: Dances (only if needed)
+        dances = {}
+        if not minimal_mode:
+            logger.info("Loading dances...")
+            from .dances import WaveDance, SpecialDance, RobotDance, MoonwalkDance
+            dances = {
+                'wave': WaveDance(pepper_conn.motion, pepper_conn.posture),
+                'special': SpecialDance(pepper_conn.motion, pepper_conn.posture),
+                'robot': RobotDance(pepper_conn.motion, pepper_conn.posture),
+                'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
+            }
         
-        # Update tablet controller with video server
-        tablet_ctrl.video_server = video_server
+        # Optional: Video server (DISABLED by default for speed!)
+        video_server = None
+        if enable_video and tablet_ctrl:
+            logger.info("Starting video server...")
+            from .video_server import create_video_server
+            video_server = create_video_server(pepper_conn.session, start=True)
+            tablet_ctrl.video_server = video_server
         
         # ====================================================================
-        # LAUNCH MODE: GUI or KEYBOARD
+        # LAUNCH MODE
         # ====================================================================
         
         if use_gui:
-            # GUI MODE (DEFAULT)
-            logger.info("Launching GUI mode...")
+            # GUI MODE
+            logger.info("Launching GUI...")
             try:
                 from .gui import launch_gui
-            except ImportError as e:
-                logger.error(f"Failed to import GUI: {e}")
-                logger.error("Install GUI dependencies: pip install -r requirements_gui.txt")
-                logger.error("Required: PyQt5, Pillow, opencv-python")
-                logger.info("\nFalling back to keyboard-only mode...")
-                use_gui = False
-            
-            if use_gui:
-                # Package controllers for GUI
+                
                 controllers_dict = {
                     'base': base_ctrl,
                     'body': body_ctrl,
                     'video': video_ctrl
                 }
                 
-                logger.info("✓ All systems ready!")
-                logger.info("✓ GUI window launching...\n")
-                
-                # Launch GUI (blocking call)
                 exit_code = launch_gui(pepper_conn, controllers_dict, dances, tablet_ctrl)
                 sys.exit(exit_code)
+                
+            except ImportError as e:
+                logger.error(f"GUI import failed: {e}")
+                logger.info("Falling back to keyboard mode...")
+                use_gui = False
         
-        # ====================================================================
-        # KEYBOARD MODE (fallback or --no-gui)
-        # ====================================================================
-        
+        # KEYBOARD MODE (FAST!)
         if not use_gui:
-            logger.info("Running in keyboard-only mode...")
+            from .input_handler import InputHandler
             
-            # Initialize input handler
-            logger.info("Initializing keyboard input handler...")
+            logger.info("Keyboard mode active...")
+            
             input_handler = InputHandler(
-                pepper_conn, base_ctrl, body_ctrl, 
+                pepper_conn, base_ctrl, body_ctrl,
                 video_ctrl, tablet_ctrl, dances
             )
             
-            # Start base movement update thread (for continuous mode)
+            # Movement update thread (50Hz)
             def base_update_loop():
-                """Update base movement continuously at 50Hz"""
                 while input_handler.running:
                     try:
                         if input_handler.continuous_mode:
                             base_ctrl.move_continuous()
                         time.sleep(0.02)  # 50Hz
                     except Exception as e:
-                        logger.error(f"Movement update error: {e}")
+                        logger.error(f"Update error: {e}")
                         time.sleep(0.1)
             
-            base_thread = threading.Thread(target=base_update_loop, daemon=True)
-            base_thread.start()
+            update_thread = threading.Thread(target=base_update_loop, daemon=True)
+            update_thread.start()
             
-            logger.info("✓ All systems ready!")
-            logger.info("✓ Keyboard control active")
-            logger.info("✓ Base movement: 50Hz update rate")
+            logger.info("✓ Ready! (Ultra-fast mode)")
             print()
             
-            # Run input handler (blocks until ESC pressed)
+            # Run
             input_handler.run()
-        
+    
     except KeyboardInterrupt:
-        logger.info("\nInterrupted by user (Ctrl+C)")
+        logger.info("\nInterrupted by user")
     except ConnectionError as e:
         logger.error(f"\n❌ CONNECTION FAILED: {e}")
-        logger.error("Please check:")
-        logger.error("  1. Pepper's IP address is correct")
-        logger.error("  2. Pepper is powered on")
-        logger.error("  3. Both devices on same network")
-        logger.error(f"  4. Test: ping {pepper_ip}")
+        logger.error(f"Check: ping {pepper_ip}")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"\n❌ FATAL ERROR: {e}", exc_info=True)
+        logger.error(f"\n❌ ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
     finally:
         # Cleanup
-        logger.info("\nShutting down safely...")
+        logger.info("\nShutting down...")
         try:
-            # Stop video if running
             if video_ctrl:
                 video_ctrl.stop()
-                logger.info("✓ Video feed stopped")
-            
-            # Stop all movement
             if base_ctrl:
                 base_ctrl.stop()
-                logger.info("✓ Movement stopped")
-            
-            # Close connection
+            if video_server:
+                video_server.stop()
             if pepper_conn:
                 pepper_conn.close()
-                logger.info("✓ Connection closed")
-                
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        except:
+            pass
         
-        logger.info("Goodbye! 👋")
+        logger.info("Done!")
 
 if __name__ == "__main__":
     run()
