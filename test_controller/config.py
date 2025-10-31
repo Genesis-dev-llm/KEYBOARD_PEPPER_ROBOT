@@ -1,12 +1,12 @@
 """
-Configuration - COMPLETE & DEBUGGED
-Ultra-responsive settings for zero-lag control.
+Configuration - COMPLETE & FIXED
+All constants properly defined, optimized for step-based control.
 
-FIXES APPLIED:
-- Added all missing constants
-- Fixed inconsistent naming
-- Added validation
-- Proper defaults for all modes
+FIXES:
+- Removed SMOOTHING_FACTOR (not needed anymore)
+- Optimized step sizes for responsive control
+- All joint limits properly defined
+- Validation functions updated
 """
 
 # ============================================================================
@@ -23,7 +23,7 @@ VIDEO_RESOLUTION = 1  # 0=160x120, 1=320x240, 2=640x480
 
 # Tablet updates
 TABLET_ENABLED = True
-TABLET_UPDATE_THROTTLE = 1.0  # Update every 1 second
+TABLET_UPDATE_THROTTLE = 0.3  # Update every 300ms (fast enough)
 TABLET_PRESET_DIR = "assets/tablet_images"
 TABLET_CUSTOM_DIR = "assets/tablet_images/custom"
 
@@ -35,64 +35,62 @@ JOINT_ANGLE_CACHE_TIMEOUT = 0.5  # Cache angles for 500ms
 STATUS_CACHE_TIMEOUT = 2.0  # Cache status for 2s
 
 # ============================================================================
-# SPEED SETTINGS
+# SPEED SETTINGS - Step-Based Control
 # ============================================================================
 
-BASE_LINEAR_SPEED_DEFAULT = 0.5     # m/s
-BASE_ANGULAR_SPEED_DEFAULT = 0.7    # rad/s
-BODY_SPEED_DEFAULT = 0.4
+BASE_LINEAR_SPEED_DEFAULT = 0.5     # m/s (not used in step mode)
+BASE_ANGULAR_SPEED_DEFAULT = 0.7    # rad/s (not used in step mode)
+BODY_SPEED_DEFAULT = 0.3            # For angleInterpolationWithSpeed
 
-SPEED_STEP = 0.1  # Bigger steps for faster adjustment
-MIN_SPEED = 0.1
-MAX_SPEED = 1.0
-TURBO_MULTIPLIER = 1.8  # More turbo!
+SPEED_STEP = 0.05  # Step size adjustment increment
+MIN_SPEED = 0.05   # Minimum step size
+MAX_SPEED = 0.5    # Maximum step size
+TURBO_MULTIPLIER = 1.5  # Turbo boost
 
 # ============================================================================
-# MOVEMENT SETTINGS - RESPONSIVE
+# MOVEMENT STEP SIZES - Optimized for Responsiveness
 # ============================================================================
 
-# Incremental mode step sizes
-LINEAR_STEP = 0.1      # 10cm steps
-ANGULAR_STEP = 0.3     # ~17 degrees
-HEAD_STEP = 0.1        # radians per keypress
-ARM_STEP = 0.1         # radians per keypress
-WRIST_STEP = 0.2       # radians per keypress
+# Base movement (per key press)
+LINEAR_STEP = 0.10      # 10cm per press
+ANGULAR_STEP = 0.25     # ~14 degrees per press
 
-# Update rate (50Hz is optimal)
-BASE_UPDATE_HZ = 50
-UPDATE_INTERVAL = 1.0 / BASE_UPDATE_HZ
+# Body movements (per key press)
+HEAD_STEP = 0.08        # ~4.5 degrees (smooth head movement)
+ARM_STEP = 0.10         # ~5.7 degrees (good arm control)
+WRIST_STEP = 0.15       # ~8.6 degrees (responsive wrists)
 
 # ============================================================================
 # JOINT LIMITS (radians) - From Pepper Documentation
 # ============================================================================
 
 # Head limits
-HEAD_YAW_MIN = -2.0857
-HEAD_YAW_MAX = 2.0857
-HEAD_PITCH_MIN = -0.6720
-HEAD_PITCH_MAX = 0.5149
+HEAD_YAW_MIN = -2.0857     # -119.5°
+HEAD_YAW_MAX = 2.0857      # 119.5°
+HEAD_PITCH_MIN = -0.7068   # -40.5°
+HEAD_PITCH_MAX = 0.6371    # 36.5°
 
 # Shoulder limits
-SHOULDER_PITCH_MIN = -2.0857
-SHOULDER_PITCH_MAX = 2.0857
-L_SHOULDER_ROLL_MIN = 0.0087
-L_SHOULDER_ROLL_MAX = 1.5620
-R_SHOULDER_ROLL_MIN = -1.5620
-R_SHOULDER_ROLL_MAX = -0.0087
+SHOULDER_PITCH_MIN = -2.0857  # -119.5°
+SHOULDER_PITCH_MAX = 2.0857   # 119.5°
+L_SHOULDER_ROLL_MIN = 0.0087   # 0.5°
+L_SHOULDER_ROLL_MAX = 1.5620   # 89.5°
+R_SHOULDER_ROLL_MIN = -1.5620  # -89.5°
+R_SHOULDER_ROLL_MAX = -0.0087  # -0.5°
 
 # Elbow limits
-ELBOW_YAW_MIN = -2.0857
-ELBOW_YAW_MAX = 2.0857
-L_ELBOW_ROLL_MIN = -1.5620
-L_ELBOW_ROLL_MAX = -0.0087
-R_ELBOW_ROLL_MIN = 0.0087
-R_ELBOW_ROLL_MAX = 1.5620
+ELBOW_YAW_MIN = -2.0857    # -119.5°
+ELBOW_YAW_MAX = 2.0857     # 119.5°
+L_ELBOW_ROLL_MIN = -1.5620  # -89.5°
+L_ELBOW_ROLL_MAX = -0.0087  # -0.5°
+R_ELBOW_ROLL_MIN = 0.0087   # 0.5°
+R_ELBOW_ROLL_MAX = 1.5620   # 89.5°
 
 # Wrist limits
-WRIST_YAW_MIN = -1.8238
-WRIST_YAW_MAX = 1.8238
+WRIST_YAW_MIN = -1.8238    # -104.5°
+WRIST_YAW_MAX = 1.8238     # 104.5°
 
-# Hand limits
+# Hand limits (0 = closed, 1 = open)
 HAND_MIN = 0.0
 HAND_MAX = 1.0
 
@@ -103,11 +101,11 @@ KNEE_PITCH_MIN = 0.0
 KNEE_PITCH_MAX = 1.0
 
 # ============================================================================
-# MOTION CONFIGURATION - BALANCED SAFETY
+# MOTION CONFIGURATION - Optimized for Step-Based
 # ============================================================================
 
 DISABLE_AUTONOMOUS_LIFE = True
-ENABLE_FOOT_CONTACT_PROTECTION = True  # Keep for safety!
+ENABLE_FOOT_CONTACT_PROTECTION = True   # Keep for safety
 ENABLE_EXTERNAL_COLLISION_PROTECTION = False  # Disable for speed
 ENABLE_MOVE_ARMS_DURING_MOVEMENT = False
 ENABLE_SMART_STIFFNESS = False  # Disable for speed
@@ -123,7 +121,7 @@ WAVE_SPEED = 0.3
 WAVE_DURATION = 0.4
 
 # Special dance (twerk)
-SPECIAL_DANCE_CYCLES = 6  # Shorter for faster
+SPECIAL_DANCE_CYCLES = 6
 SPECIAL_DANCE_SPEED = 0.6
 SPECIAL_DANCE_HIP_ANGLE = 0.30
 SPECIAL_DANCE_KNEE_ANGLE = 0.50
@@ -133,7 +131,7 @@ SPECIAL_DANCE_TIMING = 0.15
 ROBOT_SPEED = 0.5
 ROBOT_PAUSE = 0.4
 
-# Moonwalk - SAFE
+# Moonwalk
 MOONWALK_LEAN_ANGLE = 0.08
 MOONWALK_KNEE_BEND = 0.20
 MOONWALK_GLIDE_DISTANCE = -0.2
@@ -225,8 +223,12 @@ def validate_config():
     if not (0.0 < BODY_SPEED_DEFAULT <= 1.0):
         errors.append("BODY_SPEED_DEFAULT must be between 0 and 1")
     
-    if BASE_UPDATE_HZ <= 0:
-        errors.append("BASE_UPDATE_HZ must be positive")
+    # Step size checks
+    if LINEAR_STEP <= 0:
+        errors.append("LINEAR_STEP must be positive")
+    
+    if ANGULAR_STEP <= 0:
+        errors.append("ANGULAR_STEP must be positive")
     
     if VIDEO_FPS <= 0:
         errors.append("VIDEO_FPS must be positive")

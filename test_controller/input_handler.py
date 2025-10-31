@@ -1,8 +1,13 @@
 """
-MODULE: test_controller/input_handler.py
-Keyboard Input Handler - FIXED VERSION (optional improvement)
+Input Handler - SIMPLIFIED VERSION
+All movement is now step-based (like head movement).
+No more continuous/incremental mode toggle - just simple, reliable steps.
 
-FIXED: Added immediate stop() call in on_release() for better responsiveness
+IMPROVEMENTS:
+- Single movement mode (step-based)
+- No mode toggle complexity
+- Better debouncing
+- Cleaner key handling
 """
 
 import logging
@@ -13,7 +18,7 @@ from pynput.keyboard import Key
 logger = logging.getLogger(__name__)
 
 class InputHandler:
-    """Handles keyboard input and routes commands to controllers."""
+    """Simplified keyboard input handler - all step-based."""
     
     def __init__(self, pepper_conn, base_ctrl, body_ctrl, video_ctrl, tablet_ctrl, dances):
         self.pepper = pepper_conn
@@ -23,20 +28,17 @@ class InputHandler:
         self.tablet = tablet_ctrl
         self.dances = dances
         
-        # Movement mode
-        self.continuous_mode = True  # True = hold to move, False = click to step
-        
-        # Debouncing (prevent command spam)
+        # Debouncing (prevent spam)
         self._last_command_time = {}
-        self._debounce_delay = 0.1  # 100ms between same commands
+        self._debounce_delay = 0.15  # 150ms between same commands
         
-        # Dance execution tracking
+        # Dance state
         self._dance_running = False
         
         self.running = True
     
     def _should_execute(self, command_id):
-        """Check if enough time has passed to execute command again (debouncing)."""
+        """Check if enough time passed (debouncing)."""
         current_time = time.time()
         last_time = self._last_command_time.get(command_id, 0)
         
@@ -46,102 +48,63 @@ class InputHandler:
         return False
     
     def on_press(self, key):
-        """Handle key press events."""
+        """Handle key press - all commands are immediate."""
         try:
             # EMERGENCY STOP
             if key == Key.esc:
-                logger.info("ESC pressed - shutting down...")
+                logger.info("ESC - Emergency stop & quit")
                 self.tablet.set_action("Emergency Stop", "Shutting down...")
                 self.running = False
-                self.base.stop()
-                self.video.stop()
+                self.base.emergency_stop()
+                self.body.emergency_stop()
                 return False
             
-            # MODE TOGGLE
-            if hasattr(key, 'char') and key.char == 't':
-                if not self._should_execute('mode_toggle'):
-                    return
-                
-                self.continuous_mode = not self.continuous_mode
-                mode = "CONTINUOUS (hold keys)" if self.continuous_mode else "INCREMENTAL (click to step)"
-                logger.info(f"Movement mode: {mode}")
-                self.tablet.set_movement_mode(self.continuous_mode)
-                if not self.continuous_mode:
-                    self.base.stop()
-                    self.tablet.set_action("Stopped", "Switched to incremental mode")
+            # BASE MOVEMENT (step-based)
+            if key == Key.up and self._should_execute('move_forward'):
+                self.base.move_step('forward')
+                self.tablet.set_action("Moving", "Forward")
+                return
+            elif key == Key.down and self._should_execute('move_back'):
+                self.base.move_step('back')
+                self.tablet.set_action("Moving", "Backward")
+                return
+            elif key == Key.left and self._should_execute('move_left'):
+                self.base.move_step('left')
+                self.tablet.set_action("Moving", "Strafe Left")
+                return
+            elif key == Key.right and self._should_execute('move_right'):
+                self.base.move_step('right')
+                self.tablet.set_action("Moving", "Strafe Right")
                 return
             
-            # BASE MOVEMENT
-            if self.continuous_mode:
-                # CONTINUOUS MODE - Hold to move
-                if key == Key.up:
-                    self.base.set_continuous_velocity('x', 1.0)
-                    self.tablet.set_action("Moving Forward", "")
-                elif key == Key.down:
-                    self.base.set_continuous_velocity('x', -1.0)
-                    self.tablet.set_action("Moving Backward", "")
-                elif key == Key.left:
-                    self.base.set_continuous_velocity('y', 1.0)
-                    self.tablet.set_action("Strafing Left", "")
-                elif key == Key.right:
-                    self.base.set_continuous_velocity('y', -1.0)
-                    self.tablet.set_action("Strafing Right", "")
-                elif hasattr(key, 'char'):
-                    if key.char == 'q':
-                        self.base.set_continuous_velocity('theta', 1.0)
-                        self.tablet.set_action("Rotating Left", "")
-                    elif key.char == 'e':
-                        self.base.set_continuous_velocity('theta', -1.0)
-                        self.tablet.set_action("Rotating Right", "")
-            else:
-                # INCREMENTAL MODE - Click to step
-                if key == Key.up and self._should_execute('move_forward'):
-                    self.base.move_incremental('forward')
-                elif key == Key.down and self._should_execute('move_back'):
-                    self.base.move_incremental('back')
-                elif key == Key.left and self._should_execute('move_left'):
-                    self.base.move_incremental('left')
-                elif key == Key.right and self._should_execute('move_right'):
-                    self.base.move_incremental('right')
-                elif hasattr(key, 'char'):
-                    if key.char == 'q' and self._should_execute('rotate_left'):
-                        self.base.move_incremental('rotate_left')
-                    elif key.char == 'e' and self._should_execute('rotate_right'):
-                        self.base.move_incremental('rotate_right')
-            
             if hasattr(key, 'char'):
-                # TABLET CONTROLS
-                if key.char == 'm' and self._should_execute('tablet_mode'):
-                    self.tablet.cycle_mode()
-                    logger.info(f"📱 Tablet mode: {self.tablet.get_current_mode()}")
-                    return
-                elif key.char == 'h' and self._should_execute('greeting'):
-                    self.tablet.show_greeting()
-                    self.pepper.tts.say("Hello!")
-                    logger.info("👋 Showing greeting")
-                    return
+                # ROTATION
+                if key.char == 'q' and self._should_execute('rotate_left'):
+                    self.base.move_step('rotate_left')
+                    self.tablet.set_action("Moving", "Rotate Left")
+                elif key.char == 'e' and self._should_execute('rotate_right'):
+                    self.base.move_step('rotate_right')
+                    self.tablet.set_action("Moving", "Rotate Right")
                 
-                # VIDEO TOGGLE
-                elif key.char == 'v' and self._should_execute('video_toggle'):
-                    if self.video.is_active():
-                        self.video.stop()
-                    else:
-                        self.video.start()
-                    return
+                # SPACE - STOP
+                elif key.char == ' ':
+                    self.base.stop()
+                    self.tablet.set_action("Stopped", "")
+                    logger.info("⏸️ Stopped")
                 
                 # HEAD CONTROLS
-                if key.char == 'w' and self._should_execute('head_up'):
+                elif key.char == 'w' and self._should_execute('head_up'):
                     self.body.move_head('up')
-                    self.tablet.set_action("Looking Around", "Head up")
+                    self.tablet.set_action("Looking", "Head up")
                 elif key.char == 's' and self._should_execute('head_down'):
                     self.body.move_head('down')
-                    self.tablet.set_action("Looking Around", "Head down")
+                    self.tablet.set_action("Looking", "Head down")
                 elif key.char == 'a' and self._should_execute('head_left'):
                     self.body.move_head('left')
-                    self.tablet.set_action("Looking Around", "Head left")
+                    self.tablet.set_action("Looking", "Head left")
                 elif key.char == 'd' and self._should_execute('head_right'):
                     self.body.move_head('right')
-                    self.tablet.set_action("Looking Around", "Head right")
+                    self.tablet.set_action("Looking", "Head right")
                 elif key.char == 'r' and self._should_execute('head_reset'):
                     self.body.reset_head()
                     self.tablet.set_action("Ready", "Head centered")
@@ -149,22 +112,22 @@ class InputHandler:
                 # SHOULDER CONTROLS
                 elif key.char == 'u' and self._should_execute('l_shoulder_up'):
                     self.body.move_shoulder_pitch('L', 'up')
-                    self.tablet.set_action("Moving Arms", "Left shoulder up")
+                    self.tablet.set_action("Arms", "L shoulder up")
                 elif key.char == 'j' and self._should_execute('l_shoulder_down'):
                     self.body.move_shoulder_pitch('L', 'down')
-                    self.tablet.set_action("Moving Arms", "Left shoulder down")
+                    self.tablet.set_action("Arms", "L shoulder down")
                 elif key.char == 'i' and self._should_execute('r_shoulder_up'):
                     self.body.move_shoulder_pitch('R', 'up')
-                    self.tablet.set_action("Moving Arms", "Right shoulder up")
+                    self.tablet.set_action("Arms", "R shoulder up")
                 elif key.char == 'k' and self._should_execute('r_shoulder_down'):
                     self.body.move_shoulder_pitch('R', 'down')
-                    self.tablet.set_action("Moving Arms", "Right shoulder down")
+                    self.tablet.set_action("Arms", "R shoulder down")
                 elif key.char == 'o' and self._should_execute('l_arm_out'):
                     self.body.move_shoulder_roll('L', 'out')
-                    self.tablet.set_action("Moving Arms", "Left arm out")
+                    self.tablet.set_action("Arms", "L arm out")
                 elif key.char == 'l' and self._should_execute('r_arm_out'):
                     self.body.move_shoulder_roll('R', 'out')
-                    self.tablet.set_action("Moving Arms", "Right arm out")
+                    self.tablet.set_action("Arms", "R arm out")
                 
                 # ELBOW CONTROLS
                 elif key.char == '7' and self._should_execute('l_elbow_bend'):
@@ -198,24 +161,40 @@ class InputHandler:
                 
                 # SPEED CONTROLS
                 elif key.char in ['+', '='] and self._should_execute('speed_up_base'):
-                    speed = self.base.increase_speed()
-                    logger.info(f"⬆️  Base speed: {speed:.2f} m/s")
+                    step = self.base.increase_speed()
+                    logger.info(f"⬆️ Base step: {step:.2f}m")
                 elif key.char in ['-', '_'] and self._should_execute('speed_down_base'):
-                    speed = self.base.decrease_speed()
-                    logger.info(f"⬇️  Base speed: {speed:.2f} m/s")
+                    step = self.base.decrease_speed()
+                    logger.info(f"⬇️ Base step: {step:.2f}m")
                 elif key.char == '[' and self._should_execute('speed_up_body'):
                     speed = self.body.increase_speed()
-                    logger.info(f"⬆️  Body speed: {speed:.2f}")
+                    logger.info(f"⬆️ Body speed: {speed:.2f}")
                 elif key.char == ']' and self._should_execute('speed_down_body'):
                     speed = self.body.decrease_speed()
-                    logger.info(f"⬇️  Body speed: {speed:.2f}")
+                    logger.info(f"⬇️ Body speed: {speed:.2f}")
                 
                 # TURBO MODE
                 elif key.char == 'x' and self._should_execute('turbo_toggle'):
                     turbo = self.base.toggle_turbo()
                     status = "ENABLED 🚀" if turbo else "DISABLED"
-                    logger.info(f"Turbo mode: {status}")
-                    self.tablet.set_action("Turbo Mode", status)
+                    logger.info(f"Turbo: {status}")
+                    self.tablet.set_action("Turbo", status)
+                
+                # TABLET CONTROLS
+                elif key.char == 'm' and self._should_execute('tablet_mode'):
+                    self.tablet.cycle_mode()
+                    logger.info(f"📱 Tablet: {self.tablet.get_current_mode()}")
+                elif key.char == 'h' and self._should_execute('greeting'):
+                    self.tablet.show_greeting()
+                    self.pepper.tts.say("Hello!")
+                    logger.info("👋 Greeting")
+                
+                # VIDEO TOGGLE
+                elif key.char == 'v' and self._should_execute('video_toggle'):
+                    if self.video.is_active():
+                        self.video.stop()
+                    else:
+                        self.video.start()
                 
                 # DANCES
                 elif key.char == '1' and not self._dance_running:
@@ -230,48 +209,30 @@ class InputHandler:
                 # SYSTEM COMMANDS
                 elif key.char == 'p' and self._should_execute('status'):
                     self._print_status()
-                elif key.char == 'z' and self._should_execute('reset_pos'):
-                    self.base.reset_position()
             
-            # SPACE BAR - STOP
+            # SPACE BAR (special case for Key object)
             elif key == Key.space:
                 self.base.stop()
-                self.tablet.set_action("Stopped", "All movement halted")
-                logger.info("⏸️  All movement stopped")
+                self.tablet.set_action("Stopped", "")
+                logger.info("⏸️ Stopped")
                 
         except AttributeError:
             pass
         except Exception as e:
-            logger.error(f"Error handling key press: {e}")
+            logger.error(f"Key press error: {e}")
     
     def on_release(self, key):
-        """Handle key release events - FIXED VERSION."""
-        try:
-            # Only stop continuous movement when keys released
-            if self.continuous_mode:
-                if key == Key.up or key == Key.down:
-                    self.base.set_continuous_velocity('x', 0.0)
-                    self.base.stop()  # FIXED: Immediate stop
-                    self.tablet.set_action("Ready", "Waiting for input...")
-                elif key == Key.left or key == Key.right:
-                    self.base.set_continuous_velocity('y', 0.0)
-                    self.base.stop()  # FIXED: Immediate stop
-                    self.tablet.set_action("Ready", "Waiting for input...")
-                elif hasattr(key, 'char'):
-                    if key.char in ['q', 'e']:
-                        self.base.set_continuous_velocity('theta', 0.0)
-                        self.base.stop()  # FIXED: Immediate stop
-                        self.tablet.set_action("Ready", "Waiting for input...")
-        except:
-            pass
+        """Handle key release - not used in step-based mode."""
+        # In step-based mode, we don't need to handle releases
+        pass
     
     def _execute_dance(self, dance_id, speech_text):
-        """Execute a dance animation in a separate thread."""
+        """Execute dance in background thread."""
         if self._dance_running:
-            logger.warning(f"Dance already running, ignoring {dance_id}")
+            logger.warning(f"Dance already running")
             return
         
-        logger.info(f"🎭 Triggering: {dance_id.capitalize()}")
+        logger.info(f"🎭 Dance: {dance_id}")
         self.tablet.set_action(dance_id.capitalize(), "Starting...")
         self.pepper.tts.say(speech_text)
         
@@ -282,10 +243,8 @@ class InputHandler:
                 self._dance_running = True
                 if dance_id in self.dances:
                     self.dances[dance_id].perform()
-                    self.tablet.set_action("Ready", f"{dance_id.capitalize()} complete")
-                    logger.info(f"✓ {dance_id.capitalize()} dance complete")
-                else:
-                    logger.error(f"Dance not found: {dance_id}")
+                    self.tablet.set_action("Ready", f"{dance_id} complete")
+                    logger.info(f"✓ {dance_id} complete")
             except Exception as e:
                 logger.error(f"Dance error: {e}")
                 self.tablet.set_action("Ready", "Dance failed")
@@ -296,7 +255,7 @@ class InputHandler:
         thread.start()
     
     def _print_status(self):
-        """Print current robot status."""
+        """Print status."""
         try:
             status = self.pepper.get_status()
             base_state = self.base.get_state()
@@ -305,26 +264,29 @@ class InputHandler:
             print("\n" + "="*60)
             print("🤖 PEPPER ROBOT STATUS")
             print("="*60)
-            print(f"Battery: {status.get('battery', 'Unknown')}%")
-            print(f"Body Stiffness: {status.get('stiffness', 0.0):.2f}")
+            print(f"Battery: {status.get('battery', '?')}%")
             print(f"Connected: {status.get('connected', False)}")
             print()
-            print("--- MOVEMENT ---")
-            print(f"Base Speed: {base_state['linear_speed']:.2f} m/s")
-            print(f"Body Speed: {body_state['body_speed']:.2f}")
-            print(f"Movement Mode: {'CONTINUOUS' if self.continuous_mode else 'INCREMENTAL'}")
-            print(f"Currently Moving: {'YES' if self.base.is_moving() else 'NO'}")
+            print("--- BASE MOVEMENT ---")
+            print(f"Step Size: {base_state['linear_step']:.2f}m")
+            print(f"Rotation Step: {base_state['angular_step']:.2f} rad")
+            print(f"Turbo: {base_state['turbo']}")
+            print(f"Moving: {base_state['is_moving']}")
+            print()
+            print("--- BODY ---")
+            print(f"Speed: {body_state['body_speed']:.2f}")
+            print(f"Head Step: {body_state['head_step']:.2f} rad")
+            print(f"Arm Step: {body_state['arm_step']:.2f} rad")
             print()
             print("--- DISPLAYS ---")
-            print(f"Video Active: {'YES' if self.video.is_active() else 'NO'}")
-            print(f"Tablet Mode: {self.tablet.get_current_mode()}")
-            print(f"Dance Running: {'YES' if self._dance_running else 'NO'}")
+            print(f"Video: {self.video.is_active()}")
+            print(f"Tablet: {self.tablet.get_current_mode()}")
             print("="*60 + "\n")
         except Exception as e:
-            logger.error(f"Could not retrieve status: {e}")
+            logger.error(f"Status error: {e}")
     
     def run(self):
-        """Start the keyboard listener."""
+        """Start keyboard listener."""
         self._print_controls()
         
         with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
@@ -332,35 +294,33 @@ class InputHandler:
     
     def _print_controls(self):
         """Print control instructions."""
-        mode_str = "CONTINUOUS (hold)" if self.continuous_mode else "INCREMENTAL (click)"
         print("\n" + "="*60)
-        print("  🎮 PEPPER KEYBOARD CONTROLS")
+        print("  🎮 PEPPER KEYBOARD CONTROLS - STEP-BASED")
         print("="*60)
-        print(f"  Movement Mode: {mode_str}")
-        print("  T: Toggle mode | V: Video | M: Tablet mode | H: Greeting")
-        print("  P: Status | SPACE: Stop | ESC: Quit")
+        print("  All movement is step-based (reliable & predictable)")
+        print("  V: Video | M: Tablet | H: Greeting | P: Status")
+        print("  SPACE: Stop | ESC: Emergency stop & quit")
         print()
-        print("  MOVEMENT:")
-        print("    Arrow Keys: Move | Q/E: Rotate | Z: Reset position")
-        print("    +/-: Base speed | [/]: Body speed | X: Turbo mode 🚀")
+        print("  BASE MOVEMENT (each press = one step):")
+        print("    Arrow Keys: Move | Q/E: Rotate")
+        print("    +/-: Step size | X: Turbo")
         print()
         print("  HEAD:")
-        print("    W/S: Pitch | A/D: Yaw | R: Reset")
+        print("    W/S: Up/Down | A/D: Left/Right | R: Reset")
         print()
         print("  ARMS:")
-        print("    U/J: Left shoulder | I/K: Right shoulder")
-        print("    O: Left arm out | L: Right arm out")
-        print("    7/9: Left elbow | 8/0: Right elbow")
+        print("    U/J: L shoulder | I/K: R shoulder")
+        print("    O: L arm out | L: R arm out")
+        print("    7/9: L elbow | 8/0: R elbow")
         print()
         print("  WRISTS:")
-        print("    ,/.: Left wrist | ;/': Right wrist")
+        print("    ,/.: L wrist | ;/': R wrist")
         print()
-        print("  HANDS (use Shift):")
-        print("    </> (Shift+,/.): Left hand")
-        print("    (/) (Shift+9/0): Right hand")
+        print("  HANDS (Shift):")
+        print("    </> : L hand | (/): R hand")
         print()
         print("  DANCES:")
-        print("    1: Wave | 2: Special 💃 | 3: Robot 🤖 | 4: Moonwalk 🌙")
+        print("    1: Wave | 2: Special | 3: Robot | 4: Moonwalk")
         print()
-        print("  ✨ SMOOTH & RESPONSIVE!")
+        print("  ✨ SIMPLE, FAST, RELIABLE!")
         print("="*60 + "\n")

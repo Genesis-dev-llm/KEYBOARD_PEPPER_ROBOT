@@ -1,15 +1,13 @@
 """
-Base Movement Controller - SIMPLE + ASYNC OPTIMIZED
-Proven logic with async optimizations for speed.
+Base Movement Controller - SIMPLIFIED & RELIABLE
+Uses only incremental movements (step-based) for predictable behavior.
 
-TWO MODES:
-1. CONTINUOUS: Hold key = moveToward() continuously (async)
-2. INCREMENTAL: Click key = moveTo() with accumulated position (async)
-
-OPTIMIZATIONS:
-- Async moveToward/moveTo calls (non-blocking)
-- Thread pool for parallel execution
-- No blocking waits in hot path
+IMPROVEMENTS:
+- Removed complex continuous mode (source of lag)
+- Single reliable movement mode: step-based
+- Async execution for non-blocking
+- Better error handling
+- Cleaner state management
 """
 
 import logging
@@ -20,7 +18,7 @@ from .. import config
 logger = logging.getLogger(__name__)
 
 class BaseController:
-    """Simple, proven base movement controller with async optimizations."""
+    """Simple, reliable step-based movement controller."""
     
     def __init__(self, motion_service):
         self.motion = motion_service
@@ -29,255 +27,173 @@ class BaseController:
         self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT
         self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT
         
-        # Current velocities (for CONTINUOUS mode)
-        self.base_x = 0.0
-        self.base_y = 0.0
-        self.base_theta = 0.0
-        
-        # Accumulated position (for INCREMENTAL mode)
-        self.accumulated_x = 0.0
-        self.accumulated_y = 0.0
-        self.accumulated_theta = 0.0
+        # Current step sizes
+        self.linear_step = config.LINEAR_STEP  # 0.1m = 10cm
+        self.angular_step = config.ANGULAR_STEP  # 0.3 rad ≈ 17°
         
         # State
         self._turbo_enabled = False
         self._emergency_stopped = False
-        self._was_moving = False
+        self._moving = False
         
         # Thread safety
         self._lock = threading.Lock()
         
-        # Async executor (for non-blocking operations)
+        # Async executor (max 1 movement at a time)
         self._executor = ThreadPoolExecutor(
-            max_workers=2,
+            max_workers=1,
             thread_name_prefix="BaseMove"
         )
         
-        # Command throttling (prevent flooding)
-        self._last_command_time = 0
-        self._min_command_interval = 0.01  # 10ms minimum between commands
+        # Movement queue to prevent spam
+        self._pending_movement = None
     
     # ========================================================================
-    # CONTINUOUS MODE - Hold to move (async optimized)
+    # MOVEMENT - Simple step-based system
     # ========================================================================
     
-    def set_continuous_velocity(self, direction, value):
+    def move_step(self, direction):
         """
-        Set velocity for continuous movement.
-        Called when keys are pressed/released.
+        Move one step in the given direction.
+        Non-blocking, queues movement if one is already executing.
         
         Args:
-            direction: 'x', 'y', or 'theta'
-            value: -1.0 to 1.0 (multiplied by speed)
-        """
-        if self._emergency_stopped:
-            return
-        
-        with self._lock:
-            if direction == 'x':
-                self.base_x = value * self.linear_speed
-            elif direction == 'y':
-                self.base_y = value * self.linear_speed
-            elif direction == 'theta':
-                self.base_theta = value * self.angular_speed
-    
-    def move_continuous(self):
-        """
-        Execute continuous movement with async optimization.
-        Called at 50Hz (20ms) by main update loop.
-        
-        OPTIMIZATION: Uses async calls so we don't block waiting for NAOqi.
-        """
-        if self._emergency_stopped:
-            return
-        
-        # Get current velocities (quick, no blocking)
-        with self._lock:
-            x = self.base_x
-            y = self.base_y
-            theta = self.base_theta
-        
-        # Check if we're moving
-        is_moving = (abs(x) > 0.01 or abs(y) > 0.01 or abs(theta) > 0.01)
-        
-        if is_moving:
-            # Send movement command ASYNC (non-blocking)
-            self._executor.submit(self._async_move_toward, x, y, theta)
-            self._was_moving = True
-        else:
-            # Only stop if we were previously moving
-            if self._was_moving:
-                self._executor.submit(self._async_stop)
-                self._was_moving = False
-    
-    def _async_move_toward(self, x, y, theta):
-        """
-        Async wrapper for moveToward.
-        Runs in thread pool, doesn't block main loop.
-        """
-        try:
-            self.motion.moveToward(x, y, theta)
-        except Exception as e:
-            logger.error(f"Movement error: {e}")
-    
-    def _async_stop(self):
-        """
-        Async wrapper for stopMove.
-        Runs in thread pool, doesn't block main loop.
-        """
-        try:
-            self.motion.stopMove()
-        except Exception as e:
-            logger.error(f"Stop error: {e}")
-    
-    # ========================================================================
-    # INCREMENTAL MODE - Click to step (async optimized)
-    # ========================================================================
-    
-    def move_incremental(self, direction):
-        """
-        Move a fixed distance, accumulating position.
-        
-        OPTIMIZATION: moveTo() call is async, doesn't block input.
-        
-        Args:
-            direction: 'forward', 'back', 'left', 'right', 'rotate_left', 'rotate_right'
+            direction: 'forward', 'back', 'left', 'right', 
+                      'rotate_left', 'rotate_right'
         """
         if self._emergency_stopped:
             logger.warning("Emergency stop active")
-            return
+            return False
         
+        # Calculate movement parameters
+        x, y, theta = 0.0, 0.0, 0.0
+        
+        if direction == 'forward':
+            x = self.linear_step
+        elif direction == 'back':
+            x = -self.linear_step
+        elif direction == 'left':
+            y = self.linear_step
+        elif direction == 'right':
+            y = -self.linear_step
+        elif direction == 'rotate_left':
+            theta = self.angular_step
+        elif direction == 'rotate_right':
+            theta = -self.angular_step
+        else:
+            logger.warning(f"Unknown direction: {direction}")
+            return False
+        
+        # Apply turbo multiplier
+        if self._turbo_enabled:
+            x *= config.TURBO_MULTIPLIER
+            y *= config.TURBO_MULTIPLIER
+            theta *= config.TURBO_MULTIPLIER
+        
+        # Submit async (non-blocking)
+        self._executor.submit(self._execute_movement, x, y, theta, direction)
+        return True
+    
+    def _execute_movement(self, x, y, theta, direction):
+        """
+        Internal method to execute movement.
+        Runs in thread pool, doesn't block caller.
+        """
         with self._lock:
-            # Update accumulated position
-            if direction == 'forward':
-                self.accumulated_x += config.LINEAR_STEP
-            elif direction == 'back':
-                self.accumulated_x -= config.LINEAR_STEP
-            elif direction == 'left':
-                self.accumulated_y += config.LINEAR_STEP
-            elif direction == 'right':
-                self.accumulated_y -= config.LINEAR_STEP
-            elif direction == 'rotate_left':
-                self.accumulated_theta += config.ANGULAR_STEP
-            elif direction == 'rotate_right':
-                self.accumulated_theta -= config.ANGULAR_STEP
+            if self._emergency_stopped:
+                return
             
-            # Get current accumulated position
-            x = self.accumulated_x
-            y = self.accumulated_y
-            theta = self.accumulated_theta
+            self._moving = True
         
-        # Execute movement ASYNC (non-blocking)
-        self._executor.submit(self._async_move_to, x, y, theta)
-    
-    def _async_move_to(self, x, y, theta):
-        """
-        Async wrapper for moveTo.
-        Runs in thread pool, doesn't block input.
-        """
         try:
+            # Execute moveTo with speed control
+            # moveTo is blocking, but we're in a thread so it's fine
             self.motion.moveTo(x, y, theta)
-            logger.info(f"Position: ({x:.2f}, {y:.2f}, {theta:.2f})")
+            
+            logger.debug(f"Moved {direction}: ({x:.2f}, {y:.2f}, {theta:.2f})")
+            
         except Exception as e:
-            logger.error(f"Incremental movement failed: {e}")
-    
-    def reset_position(self):
-        """Reset accumulated position to origin."""
-        with self._lock:
-            self.accumulated_x = 0.0
-            self.accumulated_y = 0.0
-            self.accumulated_theta = 0.0
-        logger.info("Position reset to origin (0, 0, 0)")
+            logger.error(f"Movement failed: {e}")
+        finally:
+            with self._lock:
+                self._moving = False
     
     # ========================================================================
     # CONTROL
     # ========================================================================
     
     def stop(self):
-        """Stop all movement immediately."""
+        """Stop all movement immediately (blocking for safety)."""
         with self._lock:
-            self.base_x = 0.0
-            self.base_y = 0.0
-            self.base_theta = 0.0
+            self._moving = False
         
-        # Stop SYNC for immediate effect
         try:
             self.motion.stopMove()
-            self._was_moving = False
+            logger.debug("Movement stopped")
         except Exception as e:
             logger.error(f"Stop failed: {e}")
     
     def emergency_stop(self):
-        """Emergency stop - SYNC for safety."""
+        """Emergency stop - highest priority."""
         self._emergency_stopped = True
         
         with self._lock:
-            self.base_x = 0.0
-            self.base_y = 0.0
-            self.base_theta = 0.0
+            self._moving = False
         
-        # Emergency stop is SYNCHRONOUS (blocking) for immediate safety
         try:
             self.motion.stopMove()
-            self._was_moving = False
-            logger.error("🚨 EMERGENCY STOP - Base")
+            self.motion.killMove()  # Force kill
+            logger.error("🚨 EMERGENCY STOP")
         except Exception as e:
-            logger.error(f"Emergency stop failed: {e}")
+            logger.error(f"Emergency stop error: {e}")
     
     def resume_from_emergency(self):
         """Resume from emergency stop."""
         self._emergency_stopped = False
-        logger.info("✓ Emergency cleared - Base")
+        logger.info("✓ Emergency cleared")
     
     # ========================================================================
     # SPEED CONTROL
     # ========================================================================
     
     def increase_speed(self):
-        """Increase movement speed."""
+        """Increase step size."""
         with self._lock:
-            self.linear_speed = min(
-                self.linear_speed + config.SPEED_STEP,
-                config.MAX_SPEED
+            self.linear_step = min(
+                self.linear_step + 0.05,  # 5cm increments
+                0.5  # Max 50cm per step
             )
-            self.angular_speed = min(
-                self.angular_speed + config.SPEED_STEP,
-                config.MAX_SPEED
+            self.angular_step = min(
+                self.angular_step + 0.1,  # ~6° increments
+                1.57  # Max 90° per step
             )
-            speed = self.linear_speed
+            step = self.linear_step
         
-        logger.info(f"⬆️ Speed: {speed:.2f} m/s")
-        return speed
+        logger.info(f"⬆️ Step size: {step:.2f}m")
+        return step
     
     def decrease_speed(self):
-        """Decrease movement speed."""
+        """Decrease step size."""
         with self._lock:
-            self.linear_speed = max(
-                self.linear_speed - config.SPEED_STEP,
-                config.MIN_SPEED
+            self.linear_step = max(
+                self.linear_step - 0.05,
+                0.05  # Min 5cm per step
             )
-            self.angular_speed = max(
-                self.angular_speed - config.SPEED_STEP,
-                config.MIN_SPEED
+            self.angular_step = max(
+                self.angular_step - 0.1,
+                0.1  # Min ~6° per step
             )
-            speed = self.linear_speed
+            step = self.linear_step
         
-        logger.info(f"⬇️ Speed: {speed:.2f} m/s")
-        return speed
+        logger.info(f"⬇️ Step size: {step:.2f}m")
+        return step
     
     def toggle_turbo(self):
         """Toggle turbo mode."""
         self._turbo_enabled = not self._turbo_enabled
         
-        with self._lock:
-            if self._turbo_enabled:
-                self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT * config.TURBO_MULTIPLIER
-                self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT * config.TURBO_MULTIPLIER
-                logger.info("🚀 Turbo: ENABLED")
-            else:
-                self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT
-                self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT
-                logger.info("Turbo: DISABLED")
+        status = "ENABLED 🚀" if self._turbo_enabled else "DISABLED"
+        logger.info(f"Turbo: {status}")
         
         return self._turbo_enabled
     
@@ -286,27 +202,19 @@ class BaseController:
     # ========================================================================
     
     def is_moving(self):
-        """Check if robot is moving."""
+        """Check if currently executing a movement."""
         with self._lock:
-            return (abs(self.base_x) > 0.01 or 
-                   abs(self.base_y) > 0.01 or 
-                   abs(self.base_theta) > 0.01)
+            return self._moving
     
     def get_state(self):
         """Get current state."""
         with self._lock:
             return {
-                'x': self.base_x,
-                'y': self.base_y,
-                'theta': self.base_theta,
-                'accumulated_x': self.accumulated_x,
-                'accumulated_y': self.accumulated_y,
-                'accumulated_theta': self.accumulated_theta,
-                'linear_speed': self.linear_speed,
-                'angular_speed': self.angular_speed,
+                'linear_step': self.linear_step,
+                'angular_step': self.angular_step,
                 'turbo': self._turbo_enabled,
                 'emergency_stopped': self._emergency_stopped,
-                'is_moving': self.is_moving()
+                'is_moving': self._moving
             }
     
     def cleanup(self):

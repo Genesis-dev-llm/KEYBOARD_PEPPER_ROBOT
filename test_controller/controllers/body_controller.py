@@ -1,243 +1,414 @@
 """
-Base Movement Controller - SIMPLE & RELIABLE VERSION
-No complex accumulation - just direct movement commands.
+Body Controller - FIXED & COMPLETE
+Step-based control for head, arms, hands with async execution.
 
-TWO MODES:
-1. CONTINUOUS: Hold key = robot moves (velocity-based)
-2. INCREMENTAL: Press key = robot moves fixed distance (moveTo-based)
+IMPROVEMENTS:
+- Uses angleInterpolationWithSpeed for smooth movement
+- Step-based increments (like keyboard)
+- Async execution (non-blocking)
+- Proper joint limits
+- Better error handling
 """
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from .. import config
 
 logger = logging.getLogger(__name__)
 
-class BaseController:
-    """Simple, reliable base movement controller."""
+class BodyController:
+    """Controls head, arms, and hands with step-based movements."""
     
     def __init__(self, motion_service):
         self.motion = motion_service
         
         # Speed settings
-        self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT
-        self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT
+        self.body_speed = config.BODY_SPEED_DEFAULT  # 0.3 default
         
-        # Current velocities (for continuous mode)
-        self.base_x = 0.0
-        self.base_y = 0.0
-        self.base_theta = 0.0
+        # Step sizes (radians per command)
+        self.head_step = config.HEAD_STEP  # 0.1 rad ≈ 5.7°
+        self.arm_step = config.ARM_STEP    # 0.1 rad
+        self.wrist_step = config.WRIST_STEP  # 0.2 rad
         
         # State
-        self._turbo_enabled = False
         self._emergency_stopped = False
-        self._was_moving = False
         
-        # Lock for thread safety
+        # Thread safety
         self._lock = threading.Lock()
+        
+        # Async executor (allows multiple body parts to move simultaneously)
+        self._executor = ThreadPoolExecutor(
+            max_workers=4,  # Can move head + both arms at once
+            thread_name_prefix="BodyMove"
+        )
     
     # ========================================================================
-    # CONTINUOUS MODE (Velocity-based, hold to move)
+    # HEAD CONTROL
     # ========================================================================
     
-    def set_continuous_velocity(self, direction, value):
+    def move_head(self, direction):
         """
-        Set velocity for continuous movement.
-        Called when keys are pressed/released.
+        Move head in small increments.
         
         Args:
-            direction: 'x', 'y', or 'theta'
-            value: -1.0 to 1.0 (multiplied by speed)
+            direction: 'up', 'down', 'left', 'right'
         """
         if self._emergency_stopped:
-            return
+            return False
         
-        with self._lock:
-            if direction == 'x':
-                self.base_x = value * self.linear_speed
-            elif direction == 'y':
-                self.base_y = value * self.linear_speed
-            elif direction == 'theta':
-                self.base_theta = value * self.angular_speed
+        # Get current angles (cached where possible)
+        try:
+            current_yaw = self.motion.getAngles("HeadYaw", True)[0]
+            current_pitch = self.motion.getAngles("HeadPitch", True)[0]
+        except:
+            logger.warning("Could not get current head angles")
+            return False
+        
+        # Calculate new angles
+        new_yaw = current_yaw
+        new_pitch = current_pitch
+        
+        if direction == 'left':
+            new_yaw = current_yaw + self.head_step
+        elif direction == 'right':
+            new_yaw = current_yaw - self.head_step
+        elif direction == 'up':
+            new_pitch = current_pitch - self.head_step
+        elif direction == 'down':
+            new_pitch = current_pitch + self.head_step
+        else:
+            logger.warning(f"Unknown head direction: {direction}")
+            return False
+        
+        # Clamp to limits
+        new_yaw = config.clamp(new_yaw, config.HEAD_YAW_MIN, config.HEAD_YAW_MAX)
+        new_pitch = config.clamp(new_pitch, config.HEAD_PITCH_MIN, config.HEAD_PITCH_MAX)
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            ["HeadYaw", "HeadPitch"],
+            [new_yaw, new_pitch],
+            self.body_speed,
+            f"Head {direction}"
+        )
+        
+        return True
     
-    def move_continuous(self):
-        """
-        Execute continuous movement.
-        Called at 50Hz by main loop.
-        """
+    def reset_head(self):
+        """Reset head to center position."""
         if self._emergency_stopped:
-            return
+            return False
         
-        with self._lock:
-            # Check if we're moving
-            is_moving = (abs(self.base_x) > 0.01 or 
-                        abs(self.base_y) > 0.01 or 
-                        abs(self.base_theta) > 0.01)
-            
-            try:
-                if is_moving:
-                    # Send movement command
-                    self.motion.moveToward(self.base_x, self.base_y, self.base_theta)
-                    self._was_moving = True
-                else:
-                    # Only stop if we were moving
-                    if self._was_moving:
-                        self.motion.stopMove()
-                        self._was_moving = False
-            except Exception as e:
-                logger.error(f"Movement error: {e}")
+        self._executor.submit(
+            self._move_joints_smooth,
+            ["HeadYaw", "HeadPitch"],
+            [0.0, 0.0],
+            self.body_speed,
+            "Head reset"
+        )
+        
+        return True
     
     # ========================================================================
-    # INCREMENTAL MODE (Fixed distance per click)
+    # SHOULDER CONTROL (Pitch)
     # ========================================================================
     
-    def move_incremental(self, direction):
+    def move_shoulder_pitch(self, side, direction):
         """
-        Move a fixed distance in one direction.
-        Simple and reliable - no accumulation.
+        Move shoulder up/down.
         
         Args:
-            direction: 'forward', 'back', 'left', 'right', 'rotate_left', 'rotate_right'
+            side: 'L' or 'R'
+            direction: 'up' or 'down'
         """
         if self._emergency_stopped:
-            logger.warning("Emergency stop active")
-            return
+            return False
         
-        # Define movement amounts
-        linear_step = config.LINEAR_STEP  # e.g., 0.1m = 10cm
-        angular_step = config.ANGULAR_STEP  # e.g., 0.3 rad = ~17 degrees
-        
-        # Execute movement based on direction
-        try:
-            if direction == 'forward':
-                logger.debug(f"Moving forward {linear_step}m")
-                self.motion.moveTo(linear_step, 0.0, 0.0)
-                
-            elif direction == 'back':
-                logger.debug(f"Moving back {linear_step}m")
-                self.motion.moveTo(-linear_step, 0.0, 0.0)
-                
-            elif direction == 'left':
-                logger.debug(f"Strafing left {linear_step}m")
-                self.motion.moveTo(0.0, linear_step, 0.0)
-                
-            elif direction == 'right':
-                logger.debug(f"Strafing right {linear_step}m")
-                self.motion.moveTo(0.0, -linear_step, 0.0)
-                
-            elif direction == 'rotate_left':
-                logger.debug(f"Rotating left {angular_step} rad")
-                self.motion.moveTo(0.0, 0.0, angular_step)
-                
-            elif direction == 'rotate_right':
-                logger.debug(f"Rotating right {angular_step} rad")
-                self.motion.moveTo(0.0, 0.0, -angular_step)
-            
-            else:
-                logger.warning(f"Unknown direction: {direction}")
-                
-        except Exception as e:
-            logger.error(f"Incremental movement failed: {e}")
-    
-    # ========================================================================
-    # CONTROL
-    # ========================================================================
-    
-    def stop(self):
-        """Stop all movement immediately."""
-        with self._lock:
-            self.base_x = 0.0
-            self.base_y = 0.0
-            self.base_theta = 0.0
+        joint = f"{side}ShoulderPitch"
         
         try:
-            self.motion.stopMove()
-            self._was_moving = False
-        except Exception as e:
-            logger.error(f"Stop failed: {e}")
+            current = self.motion.getAngles(joint, True)[0]
+        except:
+            logger.warning(f"Could not get {joint} angle")
+            return False
+        
+        # Calculate new angle (negative = up for shoulder pitch)
+        if direction == 'up':
+            new_angle = current - self.arm_step
+        elif direction == 'down':
+            new_angle = current + self.arm_step
+        else:
+            return False
+        
+        # Clamp
+        new_angle = config.clamp(
+            new_angle,
+            config.SHOULDER_PITCH_MIN,
+            config.SHOULDER_PITCH_MAX
+        )
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            [joint],
+            [new_angle],
+            self.body_speed,
+            f"{side} shoulder {direction}"
+        )
+        
+        return True
     
-    def emergency_stop(self):
-        """Emergency stop."""
-        self._emergency_stopped = True
-        self.stop()
-        logger.error("🚨 EMERGENCY STOP - Base")
+    # ========================================================================
+    # SHOULDER CONTROL (Roll - out/in)
+    # ========================================================================
     
-    def resume_from_emergency(self):
-        """Resume from emergency stop."""
-        self._emergency_stopped = False
-        logger.info("✓ Emergency cleared - Base")
+    def move_shoulder_roll(self, side, direction):
+        """
+        Move arm out/in (shoulder roll).
+        
+        Args:
+            side: 'L' or 'R'
+            direction: 'out' or 'in'
+        """
+        if self._emergency_stopped:
+            return False
+        
+        joint = f"{side}ShoulderRoll"
+        
+        try:
+            current = self.motion.getAngles(joint, True)[0]
+        except:
+            return False
+        
+        # Calculate new angle
+        if direction == 'out':
+            # Left arm: positive = out, Right arm: negative = out
+            new_angle = current + self.arm_step if side == 'L' else current - self.arm_step
+        elif direction == 'in':
+            new_angle = current - self.arm_step if side == 'L' else current + self.arm_step
+        else:
+            return False
+        
+        # Clamp to side-specific limits
+        if side == 'L':
+            new_angle = config.clamp(new_angle, config.L_SHOULDER_ROLL_MIN, config.L_SHOULDER_ROLL_MAX)
+        else:
+            new_angle = config.clamp(new_angle, config.R_SHOULDER_ROLL_MIN, config.R_SHOULDER_ROLL_MAX)
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            [joint],
+            [new_angle],
+            self.body_speed,
+            f"{side} arm {direction}"
+        )
+        
+        return True
+    
+    # ========================================================================
+    # ELBOW CONTROL
+    # ========================================================================
+    
+    def move_elbow_roll(self, side, direction):
+        """
+        Bend/straighten elbow.
+        
+        Args:
+            side: 'L' or 'R'
+            direction: 'bend' or 'straighten'
+        """
+        if self._emergency_stopped:
+            return False
+        
+        joint = f"{side}ElbowRoll"
+        
+        try:
+            current = self.motion.getAngles(joint, True)[0]
+        except:
+            return False
+        
+        # Calculate new angle
+        if direction == 'bend':
+            # Left: negative = bend, Right: positive = bend
+            new_angle = current - self.arm_step if side == 'L' else current + self.arm_step
+        elif direction == 'straighten':
+            new_angle = current + self.arm_step if side == 'L' else current - self.arm_step
+        else:
+            return False
+        
+        # Clamp
+        if side == 'L':
+            new_angle = config.clamp(new_angle, config.L_ELBOW_ROLL_MIN, config.L_ELBOW_ROLL_MAX)
+        else:
+            new_angle = config.clamp(new_angle, config.R_ELBOW_ROLL_MIN, config.R_ELBOW_ROLL_MAX)
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            [joint],
+            [new_angle],
+            self.body_speed,
+            f"{side} elbow {direction}"
+        )
+        
+        return True
+    
+    # ========================================================================
+    # WRIST CONTROL
+    # ========================================================================
+    
+    def rotate_wrist(self, side, direction):
+        """
+        Rotate wrist.
+        
+        Args:
+            side: 'L' or 'R'
+            direction: 'cw' (clockwise) or 'ccw' (counter-clockwise)
+        """
+        if self._emergency_stopped:
+            return False
+        
+        joint = f"{side}WristYaw"
+        
+        try:
+            current = self.motion.getAngles(joint, True)[0]
+        except:
+            return False
+        
+        # Calculate new angle
+        if direction == 'cw':
+            new_angle = current + self.wrist_step
+        elif direction == 'ccw':
+            new_angle = current - self.wrist_step
+        else:
+            return False
+        
+        # Clamp
+        new_angle = config.clamp(new_angle, config.WRIST_YAW_MIN, config.WRIST_YAW_MAX)
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            [joint],
+            [new_angle],
+            self.body_speed,
+            f"{side} wrist {direction}"
+        )
+        
+        return True
+    
+    # ========================================================================
+    # HAND CONTROL
+    # ========================================================================
+    
+    def move_hand(self, side, action):
+        """
+        Open/close hand.
+        
+        Args:
+            side: 'L' or 'R'
+            action: 'open' or 'close'
+        """
+        if self._emergency_stopped:
+            return False
+        
+        joint = f"{side}Hand"
+        
+        # Hand is 0.0 = closed, 1.0 = open
+        target = 1.0 if action == 'open' else 0.0
+        
+        # Execute async
+        self._executor.submit(
+            self._move_joints_smooth,
+            [joint],
+            [target],
+            self.body_speed,
+            f"{side} hand {action}"
+        )
+        
+        return True
     
     # ========================================================================
     # SPEED CONTROL
     # ========================================================================
     
     def increase_speed(self):
-        """Increase movement speed."""
+        """Increase body movement speed."""
         with self._lock:
-            self.linear_speed = min(
-                self.linear_speed + config.SPEED_STEP,
-                config.MAX_SPEED
-            )
-            self.angular_speed = min(
-                self.angular_speed + config.SPEED_STEP,
-                config.MAX_SPEED
-            )
+            self.body_speed = min(self.body_speed + 0.1, 1.0)
+            speed = self.body_speed
         
-        logger.info(f"⬆️ Speed: {self.linear_speed:.2f} m/s")
-        return self.linear_speed
+        logger.info(f"⬆️ Body speed: {speed:.2f}")
+        return speed
     
     def decrease_speed(self):
-        """Decrease movement speed."""
+        """Decrease body movement speed."""
         with self._lock:
-            self.linear_speed = max(
-                self.linear_speed - config.SPEED_STEP,
-                config.MIN_SPEED
-            )
-            self.angular_speed = max(
-                self.angular_speed - config.SPEED_STEP,
-                config.MIN_SPEED
-            )
+            self.body_speed = max(self.body_speed - 0.1, 0.1)
+            speed = self.body_speed
         
-        logger.info(f"⬇️ Speed: {self.linear_speed:.2f} m/s")
-        return self.linear_speed
+        logger.info(f"⬇️ Body speed: {speed:.2f}")
+        return speed
     
-    def toggle_turbo(self):
-        """Toggle turbo mode."""
-        self._turbo_enabled = not self._turbo_enabled
+    # ========================================================================
+    # INTERNAL METHODS
+    # ========================================================================
+    
+    def _move_joints_smooth(self, joint_names, angles, speed, description=""):
+        """
+        Internal method to move joints smoothly.
+        Uses angleInterpolationWithSpeed for smooth motion.
+        Runs in thread pool (non-blocking).
+        """
+        if self._emergency_stopped:
+            return
         
-        with self._lock:
-            if self._turbo_enabled:
-                self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT * config.TURBO_MULTIPLIER
-                self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT * config.TURBO_MULTIPLIER
-                logger.info("🚀 Turbo: ENABLED")
+        try:
+            # Use smooth interpolation
+            if len(joint_names) == 1:
+                self.motion.angleInterpolationWithSpeed(
+                    joint_names[0],
+                    angles[0],
+                    speed
+                )
             else:
-                self.linear_speed = config.BASE_LINEAR_SPEED_DEFAULT
-                self.angular_speed = config.BASE_ANGULAR_SPEED_DEFAULT
-                logger.info("Turbo: DISABLED")
+                self.motion.angleInterpolationWithSpeed(
+                    joint_names,
+                    angles,
+                    speed
+                )
+            
+            if description:
+                logger.debug(f"Body: {description}")
         
-        return self._turbo_enabled
+        except Exception as e:
+            logger.error(f"Body movement error: {e}")
     
-    # ========================================================================
-    # STATUS
-    # ========================================================================
+    def emergency_stop(self):
+        """Emergency stop."""
+        self._emergency_stopped = True
+        logger.error("🚨 EMERGENCY STOP - Body")
     
-    def is_moving(self):
-        """Check if robot is moving."""
-        with self._lock:
-            return (abs(self.base_x) > 0.01 or 
-                   abs(self.base_y) > 0.01 or 
-                   abs(self.base_theta) > 0.01)
+    def resume_from_emergency(self):
+        """Resume from emergency."""
+        self._emergency_stopped = False
+        logger.info("✓ Emergency cleared - Body")
     
     def get_state(self):
         """Get current state."""
         with self._lock:
             return {
-                'x': self.base_x,
-                'y': self.base_y,
-                'theta': self.base_theta,
-                'linear_speed': self.linear_speed,
-                'angular_speed': self.angular_speed,
-                'turbo': self._turbo_enabled,
-                'emergency_stopped': self._emergency_stopped,
-                'is_moving': self.is_moving()
+                'body_speed': self.body_speed,
+                'head_step': self.head_step,
+                'arm_step': self.arm_step,
+                'emergency_stopped': self._emergency_stopped
             }
+    
+    def cleanup(self):
+        """Cleanup resources."""
+        logger.info("Cleaning up body controller...")
+        self._executor.shutdown(wait=False)
+        logger.info("✓ Body controller cleaned up")

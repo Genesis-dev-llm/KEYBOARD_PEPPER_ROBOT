@@ -1,24 +1,22 @@
 """
-Main Entry Point - ULTRA OPTIMIZED VERSION
-Minimal startup, fast execution, optional features.
+Main Entry Point - SIMPLIFIED
+No more continuous update loop needed!
 
-OPTIMIZATIONS:
-- Lazy loading (only load what's needed)
-- Optional video server
-- Fast keyboard mode by default
-- Minimal imports
+IMPROVEMENTS:
+- Removed base_update_loop (not needed with step-based)
+- Cleaner initialization
+- Better error handling
+- Faster startup
 """
 
 import sys
 import os
 import logging
 import argparse
-import threading
-import time
 
 # Minimal logging
 logging.basicConfig(
-    level=logging.WARNING,  # Less spam!
+    level=logging.WARNING,
     format='%(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -27,16 +25,16 @@ logger = logging.getLogger(__name__)
 logging.getLogger('test_controller').setLevel(logging.INFO)
 
 def run():
-    """Main entry - OPTIMIZED."""
+    """Main entry - simplified."""
     
-    parser = argparse.ArgumentParser(description="Pepper Control - FAST MODE")
+    parser = argparse.ArgumentParser(description="Pepper Control - Step-Based")
     
     parser.add_argument('ip', nargs='?', help="Pepper's IP")
     parser.add_argument('--ip', dest='ip_flag', help="Pepper's IP (alt)")
-    parser.add_argument('--no-gui', action='store_true', help="Keyboard only (FAST)")
-    parser.add_argument('--gui', action='store_true', help="Launch GUI (slower)")
-    parser.add_argument('--no-video', action='store_true', help="Disable video server")
-    parser.add_argument('--minimal', action='store_true', help="Absolute minimal mode")
+    parser.add_argument('--no-gui', action='store_true', help="Keyboard only")
+    parser.add_argument('--gui', action='store_true', help="Launch GUI")
+    parser.add_argument('--no-video', action='store_true', help="Disable video")
+    parser.add_argument('--minimal', action='store_true', help="Minimal mode")
     
     args = parser.parse_args()
     
@@ -68,16 +66,16 @@ def run():
             pass
     
     # ========================================================================
-    # FAST INITIALIZATION
+    # INITIALIZATION
     # ========================================================================
     
     print("\n" + "="*60)
     mode_desc = "MINIMAL" if minimal_mode else ("GUI" if use_gui else "KEYBOARD")
-    print(f"  🤖 PEPPER CONTROL - {mode_desc} MODE")
+    print(f"  🤖 PEPPER CONTROL - {mode_desc} MODE (STEP-BASED)")
     print("="*60 + "\n")
     
     try:
-        # Import only what we need
+        # Import controllers
         from .controllers import PepperConnection, BaseController, BodyController
         
         # Connect
@@ -89,19 +87,19 @@ def run():
         base_ctrl = BaseController(pepper_conn.motion)
         body_ctrl = BodyController(pepper_conn.motion)
         
-        # Optional: Video controller (only if needed)
+        # Optional: Video controller
         video_ctrl = None
         if not minimal_mode:
             from .controllers import VideoController
             video_ctrl = VideoController(pepper_ip)
         
-        # Optional: Tablet (only if needed)
+        # Optional: Tablet
         tablet_ctrl = None
         if not minimal_mode:
             from .tablet import TabletController
             tablet_ctrl = TabletController(pepper_conn.session, pepper_ip)
         
-        # Optional: Dances (only if needed)
+        # Optional: Dances
         dances = {}
         if not minimal_mode:
             logger.info("Loading dances...")
@@ -113,7 +111,7 @@ def run():
                 'moonwalk': MoonwalkDance(pepper_conn.motion, pepper_conn.posture)
             }
         
-        # Optional: Video server (DISABLED by default for speed!)
+        # Optional: Video server
         video_server = None
         if enable_video and tablet_ctrl:
             logger.info("Starting video server...")
@@ -145,35 +143,22 @@ def run():
                 logger.info("Falling back to keyboard mode...")
                 use_gui = False
         
-        # KEYBOARD MODE (FAST!)
+        # KEYBOARD MODE
         if not use_gui:
             from .input_handler import InputHandler
             
-            logger.info("Keyboard mode active...")
+            logger.info("Keyboard mode active (step-based)...")
             
             input_handler = InputHandler(
                 pepper_conn, base_ctrl, body_ctrl,
                 video_ctrl, tablet_ctrl, dances
             )
             
-            # Movement update thread (50Hz)
-            def base_update_loop():
-                while input_handler.running:
-                    try:
-                        if input_handler.continuous_mode:
-                            base_ctrl.move_continuous()
-                        time.sleep(0.02)  # 50Hz
-                    except Exception as e:
-                        logger.error(f"Update error: {e}")
-                        time.sleep(0.1)
-            
-            update_thread = threading.Thread(target=base_update_loop, daemon=True)
-            update_thread.start()
-            
-            logger.info("✓ Ready! (Ultra-fast mode)")
+            logger.info("✓ Ready! (Step-based control)")
             print()
             
-            # Run
+            # Run keyboard listener (blocking)
+            # No update loop needed - all movement is async!
             input_handler.run()
     
     except KeyboardInterrupt:
@@ -191,13 +176,15 @@ def run():
         # Cleanup
         logger.info("\nShutting down...")
         try:
-            if video_ctrl:
+            if 'base_ctrl' in locals():
+                base_ctrl.cleanup()
+            if 'body_ctrl' in locals():
+                body_ctrl.cleanup()
+            if 'video_ctrl' in locals() and video_ctrl:
                 video_ctrl.stop()
-            if base_ctrl:
-                base_ctrl.stop()
-            if video_server:
+            if 'video_server' in locals() and video_server:
                 video_server.stop()
-            if pepper_conn:
+            if 'pepper_conn' in locals():
                 pepper_conn.close()
         except:
             pass
